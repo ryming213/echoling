@@ -29,15 +29,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.Font
-import com.echoling.app.R
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
+import com.echoling.app.R
 import com.echoling.app.player.subtitle.Subtitle
 import com.echoling.app.player.subtitle.SubtitleMode
 import com.echoling.app.presentation.viewmodel.PracticeViewModel
@@ -60,6 +64,8 @@ fun PracticeScreen(
     val currentSubtitleIndex by viewModel.currentSubtitleIndex.collectAsState()
     val recordingPath by viewModel.recordingPath.collectAsState()
     val isPlayingRecording by viewModel.isPlayingRecording.collectAsState()
+    val isVideoMode by viewModel.isVideoMode.collectAsState()
+    val videoPlayerState by viewModel.videoPlayerState.collectAsState()
     var currentSubtitle by remember { mutableStateOf<String?>(null) }
     var showWordDialog by remember { mutableStateOf(false) }
     var selectedWord by remember { mutableStateOf("") }
@@ -92,9 +98,10 @@ fun PracticeScreen(
 
     LaunchedEffect(Unit) {
         viewModel.initializePlayer()
-        val mediaUri = if (!videoUri.isNullOrBlank()) videoUri else audioUri
-        if (!mediaUri.isNullOrBlank()) {
-            viewModel.loadMedia(mediaUri, subtitleUri, courseId)
+        if (!videoUri.isNullOrBlank()) {
+            viewModel.loadVideo(videoUri, subtitleUri, courseId)
+        } else if (!audioUri.isNullOrBlank()) {
+            viewModel.loadMedia(audioUri, subtitleUri, courseId)
         }
     }
 
@@ -171,6 +178,16 @@ fun PracticeScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            // Video Player (when in video mode)
+            if (isVideoMode && videoPlayerState != null) {
+                VideoPlayerSection(
+                    exoPlayer = videoPlayerState!!,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(16f / 9f)
+                )
+            }
+
             // Compact Playback Controls
             PlaybackControlsBar(
                 isPlaying = playbackState.isPlaying,
@@ -914,6 +931,27 @@ private fun WordSaveDialog(
         },
         shape = RoundedCornerShape(24.dp)
     )
+}
+
+@Composable
+private fun VideoPlayerSection(
+    exoPlayer: ExoPlayer,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .background(Color.Black)
+    ) {
+        AndroidView(
+            factory = { context ->
+                PlayerView(context).apply {
+                    player = exoPlayer
+                    useController = false // We use our own controls
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+    }
 }
 
 private fun formatTime(ms: Long): String {
