@@ -8,7 +8,7 @@ sealed class Screen(val route: String) {
     }
     data object Practice : Screen("practice/{courseId}/{audioUri}/{videoUri}/{subtitleUri}") {
         fun createRoute(courseId: String, audioUri: String?, videoUri: String?, subtitleUri: String?) =
-            "practice/$courseId/${(audioUri ?: "null").encodeForRoute()}/${(videoUri ?: "null").encodeForRoute()}/${(subtitleUri ?: "null").encodeForRoute()}"
+            "practice/$courseId/${audioUri.orEmpty().ifBlank { "null" }.encodeForRoute()}/${videoUri.orEmpty().ifBlank { "null" }.encodeForRoute()}/${subtitleUri.orEmpty().ifBlank { "null" }.encodeForRoute()}"
     }
     data object Vocabulary : Screen("vocabulary")
     data object Settings : Screen("settings")
