@@ -10,8 +10,10 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Upload
+import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material.icons.outlined.AudioFile
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.VideoFile
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -29,6 +31,7 @@ fun ImportScreen(
     viewModel: ImportViewModel = hiltViewModel()
 ) {
     var audioUri by remember { mutableStateOf<Uri?>(null) }
+    var videoUri by remember { mutableStateOf<Uri?>(null) }
     var subtitleUri by remember { mutableStateOf<Uri?>(null) }
     var courseTitle by remember { mutableStateOf("") }
 
@@ -39,6 +42,12 @@ fun ImportScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         audioUri = uri
+    }
+
+    val videoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        videoUri = uri
     }
 
     val subtitlePickerLauncher = rememberLauncherForActivityResult(
@@ -83,7 +92,7 @@ fun ImportScreen(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Add audio and subtitle files to create a learning course",
+                    text = "Add audio/video and subtitle files to create a learning course",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -104,13 +113,27 @@ fun ImportScreen(
 
             // Audio file selector
             FileSelectorCard(
-                title = "Audio File",
+                title = "Audio File (Optional)",
                 subtitle = audioUri?.lastPathSegment ?: "Select audio file",
                 icon = Icons.Outlined.AudioFile,
                 isSelected = audioUri != null,
                 onClick = {
                     if (importState != ImportState.IMPORTING) {
                         audioPickerLauncher.launch(arrayOf("audio/*"))
+                    }
+                },
+                enabled = importState != ImportState.IMPORTING
+            )
+
+            // Video file selector
+            FileSelectorCard(
+                title = "Video File (Optional)",
+                subtitle = videoUri?.lastPathSegment ?: "Select video file",
+                icon = Icons.Outlined.VideoFile,
+                isSelected = videoUri != null,
+                onClick = {
+                    if (importState != ImportState.IMPORTING) {
+                        videoPickerLauncher.launch(arrayOf("video/*"))
                     }
                 },
                 enabled = importState != ImportState.IMPORTING
@@ -158,10 +181,12 @@ fun ImportScreen(
             // Import button
             Button(
                 onClick = {
-                    if (audioUri != null && courseTitle.isNotBlank()) {
+                    val hasMedia = audioUri != null || videoUri != null
+                    if (hasMedia && courseTitle.isNotBlank()) {
                         viewModel.importCourse(
                             title = courseTitle,
-                            audioUri = audioUri!!,
+                            audioUri = audioUri,
+                            videoUri = videoUri,
                             subtitleUri = subtitleUri
                         )
                     }
@@ -169,7 +194,7 @@ fun ImportScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
-                enabled = audioUri != null && courseTitle.isNotBlank() && importState != ImportState.IMPORTING,
+                enabled = (audioUri != null || videoUri != null) && courseTitle.isNotBlank() && importState != ImportState.IMPORTING,
                 shape = RoundedCornerShape(16.dp)
             ) {
                 if (importState == ImportState.IMPORTING) {

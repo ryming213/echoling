@@ -31,8 +31,8 @@ fun EchoLingNavGraph(
                 onNavigateToVocabulary = {
                     navController.navigate(Screen.Vocabulary.route)
                 },
-                onNavigateToPractice = { courseId, audioUri, subtitleUri ->
-                    navController.navigate(Screen.Practice.createRoute(courseId, audioUri, subtitleUri))
+                onNavigateToPractice = { courseId, audioUri, videoUri, subtitleUri ->
+                    navController.navigate(Screen.Practice.createRoute(courseId, audioUri, videoUri, subtitleUri))
                 },
                 onNavigateToStatistics = {
                     navController.navigate(Screen.Statistics.route)
@@ -69,8 +69,8 @@ fun EchoLingNavGraph(
             CourseDetailScreen(
                 courseId = courseId,
                 onNavigateBack = { navController.popBackStack() },
-                onNavigateToPractice = { audioUri, subtitleUri ->
-                    navController.navigate(Screen.Practice.createRoute(courseId, audioUri, subtitleUri))
+                onNavigateToPractice = { audioUri, videoUri, subtitleUri ->
+                    navController.navigate(Screen.Practice.createRoute(courseId, audioUri, videoUri, subtitleUri))
                 }
             )
         }
@@ -80,17 +80,20 @@ fun EchoLingNavGraph(
             arguments = listOf(
                 navArgument("courseId") { type = NavType.StringType },
                 navArgument("audioUri") { type = NavType.StringType },
+                navArgument("videoUri") { type = NavType.StringType },
                 navArgument("subtitleUri") { type = NavType.StringType }
             )
         ) { backStackEntry ->
             val courseId = backStackEntry.arguments?.getString("courseId") ?: return@composable
-            val audioUri = backStackEntry.arguments?.getString("audioUri")?.decodeFromRoute()
+            val audioUri = backStackEntry.arguments?.getString("audioUri")?.decodeFromRoute()?.takeIf { it != "null" }
+            val videoUri = backStackEntry.arguments?.getString("videoUri")?.decodeFromRoute()?.takeIf { it != "null" }
             val subtitleUri = backStackEntry.arguments?.getString("subtitleUri")?.decodeFromRoute()?.takeIf { it != "null" }
 
             PracticeScreen(
                 courseId = courseId,
                 onNavigateBack = { navController.popBackStack() },
                 audioUri = audioUri,
+                videoUri = videoUri,
                 subtitleUri = subtitleUri
             )
         }

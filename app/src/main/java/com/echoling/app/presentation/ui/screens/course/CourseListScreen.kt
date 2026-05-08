@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.Headphones
 import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.VideoFile
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -180,7 +181,8 @@ private fun CourseCard(
     onClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
-    val hasAudio = course.audioUri.isNotEmpty()
+    val hasAudio = course.hasAudio()
+    val hasVideo = course.hasVideo()
     val hasSubtitles = course.subtitleUri != null
 
     Card(
@@ -232,6 +234,14 @@ private fun CourseCard(
                         Icon(
                             imageVector = Icons.Outlined.Headphones,
                             contentDescription = "Has audio",
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    if (hasVideo) {
+                        Icon(
+                            imageVector = Icons.Outlined.VideoFile,
+                            contentDescription = "Has video",
                             modifier = Modifier.size(16.dp),
                             tint = MaterialTheme.colorScheme.primary
                         )

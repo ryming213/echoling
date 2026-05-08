@@ -5,11 +5,15 @@ data class Course(
     val title: String,
     val description: String,
     val difficulty: String,
-    val audioUri: String,
+    val audioUri: String?,
+    val videoUri: String?,
     val subtitleUri: String?,
     val durationMs: Long,
     val totalSentences: Int,
     val thumbnailUri: String?,
     val createdAt: Long,
     val updatedAt: Long
-)
+) {
+    fun hasVideo(): Boolean = !videoUri.isNullOrBlank()
+    fun hasAudio(): Boolean = !audioUri.isNullOrBlank()
+}
