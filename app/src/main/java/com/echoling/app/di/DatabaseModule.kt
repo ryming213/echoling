@@ -25,7 +25,9 @@ object DatabaseModule {
             context,
             EchoLingDatabase::class.java,
             "echo_ling_database"
-        ).build()
+        )
+            .fallbackToDestructiveMigration()
+            .build()
     }
 
     @Provides
