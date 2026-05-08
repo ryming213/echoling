@@ -225,16 +225,12 @@ class PracticeViewModel @Inject constructor(
                     _subtitles.value = parsed
 
                     audioPlayer.setSubtitleProvider { positionMs ->
-                        // Find the subtitle that contains this position with tolerance for timing drift
-                        // Audio subtitles often have cumulative timing errors, so we use a sliding window approach
+                        // Find exact matching subtitle first, then try tolerance
                         val sub = parsed.find { sub ->
-                            positionMs >= sub.startTimeMs - 200 && positionMs <= sub.endTimeMs + 200
-                        } ?: run {
-                            // If no match within tolerance, find the nearest subtitle by start time
-                            // that is close to the current position
-                            parsed.filter { sub ->
-                                kotlin.math.abs(sub.startTimeMs - positionMs) < 2000
-                            }.minByOrNull { kotlin.math.abs(it.startTimeMs - positionMs) }
+                            positionMs >= sub.startTimeMs && positionMs <= sub.endTimeMs
+                        } ?: parsed.find { sub ->
+                            // Small tolerance: within 100ms before start or after end
+                            positionMs >= sub.startTimeMs - 100 && positionMs <= sub.endTimeMs + 100
                         }
                         if (sub != null) {
                             currentSubtitleObj = sub
