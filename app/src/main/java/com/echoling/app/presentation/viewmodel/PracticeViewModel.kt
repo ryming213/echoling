@@ -80,46 +80,64 @@ class PracticeViewModel @Inject constructor(
     }
 
     fun loadMedia(audioUri: String, subtitleUri: String?, courseId: String = "") {
+        if (audioUri.isBlank()) return
         currentCourseId = courseId
-        audioPlayer.setMediaUri(audioUri)
+        _isVideoMode.value = false
+
+        try {
+            audioPlayer.setMediaUri(audioUri)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return
+        }
 
         subtitleUri?.let { uri ->
-            loadSubtitles(uri)
+            if (uri.isNotBlank()) {
+                loadSubtitles(uri)
+            }
         }
 
         startPositionUpdates()
     }
 
     fun loadVideo(videoUri: String, subtitleUri: String?, courseId: String = "") {
+        if (videoUri.isBlank()) return
         currentCourseId = courseId
         _isVideoMode.value = true
 
-        // Initialize video player
-        if (videoPlayer == null) {
-            videoPlayer = ExoPlayer.Builder(application).build().apply {
-                addListener(object : Player.Listener {
-                    override fun onIsPlayingChanged(isPlaying: Boolean) {
-                        // Sync with audio player state if needed
-                    }
-
-                    override fun onPlaybackStateChanged(state: Int) {
-                        if (state == Player.STATE_READY) {
-                            // Video is ready
+        try {
+            // Initialize video player
+            if (videoPlayer == null) {
+                videoPlayer = ExoPlayer.Builder(application).build().apply {
+                    addListener(object : Player.Listener {
+                        override fun onIsPlayingChanged(isPlaying: Boolean) {
+                            // Sync with audio player state if needed
                         }
-                    }
-                })
-            }
-            _videoPlayer.value = videoPlayer
-        }
 
-        videoPlayer?.apply {
-            val mediaItem = MediaItem.fromUri(Uri.parse(videoUri))
-            setMediaItem(mediaItem)
-            prepare()
+                        override fun onPlaybackStateChanged(state: Int) {
+                            if (state == Player.STATE_READY) {
+                                // Video is ready
+                            }
+                        }
+                    })
+                }
+                _videoPlayer.value = videoPlayer
+            }
+
+            videoPlayer?.apply {
+                val mediaItem = MediaItem.fromUri(Uri.parse(videoUri))
+                setMediaItem(mediaItem)
+                prepare()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return
         }
 
         subtitleUri?.let { uri ->
-            loadSubtitles(uri)
+            if (uri.isNotBlank()) {
+                loadSubtitles(uri)
+            }
         }
 
         startPositionUpdates()
