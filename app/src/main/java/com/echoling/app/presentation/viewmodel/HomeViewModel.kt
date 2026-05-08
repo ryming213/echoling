@@ -39,37 +39,46 @@ class HomeViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            databaseSeeder.seedIfEmpty()
+            try {
+                databaseSeeder.seedIfEmpty()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
         loadHomeData()
     }
 
     private fun loadHomeData() {
         viewModelScope.launch {
-            combine(
-                courseRepository.getAllCourses(),
-                progressRepository.getAllProgress()
-            ) { courses, progressList ->
-                val progressMap = progressList.associateBy { it.courseId }
-                val continueItem = courses
-                    .mapNotNull { course ->
-                        progressMap[course.courseId]?.let { progress ->
-                            ContinueLearningItem(course, progress)
+            try {
+                combine(
+                    courseRepository.getAllCourses(),
+                    progressRepository.getAllProgress()
+                ) { courses, progressList ->
+                    val progressMap = progressList.associateBy { it.courseId }
+                    val continueItem = courses
+                        .mapNotNull { course ->
+                            progressMap[course.courseId]?.let { progress ->
+                                ContinueLearningItem(course, progress)
+                            }
                         }
-                    }
-                    .maxByOrNull { it.progress.lastLearnTime }
+                        .maxByOrNull { it.progress.lastLearnTime }
 
-                val totalTime = progressList.sumOf { it.totalLearnTimeMs }
-                val coursesLearned = progressList.count { it.finishRate > 0 }
+                    val totalTime = progressList.sumOf { it.totalLearnTimeMs }
+                    val coursesLearned = progressList.count { it.finishRate > 0 }
 
-                HomeUiState(
-                    continueLearning = continueItem,
-                    totalLearnTimeMs = totalTime,
-                    totalCoursesLearned = coursesLearned,
-                    isLoading = false
-                )
-            }.collect { state ->
-                _uiState.value = state
+                    HomeUiState(
+                        continueLearning = continueItem,
+                        totalLearnTimeMs = totalTime,
+                        totalCoursesLearned = coursesLearned,
+                        isLoading = false
+                    )
+                }.collect { state ->
+                    _uiState.value = state
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _uiState.value = HomeUiState(isLoading = false)
             }
         }
     }
