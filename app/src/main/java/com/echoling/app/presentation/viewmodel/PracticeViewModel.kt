@@ -2,8 +2,12 @@ package com.echoling.app.presentation.viewmodel
 
 import android.app.Application
 import android.media.MediaPlayer
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
 import com.echoling.app.domain.model.Word
 import com.echoling.app.domain.repository.WordRepository
 import com.echoling.app.player.AudioPlayer
@@ -63,6 +67,14 @@ class PracticeViewModel @Inject constructor(
     private val _isPlayingRecording = MutableStateFlow(false)
     val isPlayingRecording: StateFlow<Boolean> = _isPlayingRecording.asStateFlow()
 
+    // Video player for video playback
+    private var videoPlayer: ExoPlayer? = null
+    private val _videoPlayer = MutableStateFlow<ExoPlayer?>(null)
+    val videoPlayerState: StateFlow<ExoPlayer?> = _videoPlayer.asStateFlow()
+
+    private val _isVideoMode = MutableStateFlow(false)
+    val isVideoMode: StateFlow<Boolean> = _isVideoMode.asStateFlow()
+
     fun initializePlayer() {
         audioPlayer.initialize()
     }
@@ -77,6 +89,62 @@ class PracticeViewModel @Inject constructor(
 
         startPositionUpdates()
     }
+
+    fun loadVideo(videoUri: String, subtitleUri: String?, courseId: String = "") {
+        currentCourseId = courseId
+        _isVideoMode.value = true
+
+        // Initialize video player
+        if (videoPlayer == null) {
+            videoPlayer = ExoPlayer.Builder(application).build().apply {
+                addListener(object : Player.Listener {
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        // Sync with audio player state if needed
+                    }
+
+                    override fun onPlaybackStateChanged(state: Int) {
+                        if (state == Player.STATE_READY) {
+                            // Video is ready
+                        }
+                    }
+                })
+            }
+            _videoPlayer.value = videoPlayer
+        }
+
+        videoPlayer?.apply {
+            val mediaItem = MediaItem.fromUri(Uri.parse(videoUri))
+            setMediaItem(mediaItem)
+            prepare()
+        }
+
+        subtitleUri?.let { uri ->
+            loadSubtitles(uri)
+        }
+
+        startPositionUpdates()
+    }
+
+    fun playVideo() {
+        videoPlayer?.play()
+        // Update audio player state to reflect playing
+        audioPlayer.play()
+    }
+
+    fun pauseVideo() {
+        videoPlayer?.pause()
+        audioPlayer.pause()
+        singleSubtitleIndex = -1
+    }
+
+    fun seekVideoTo(positionMs: Long) {
+        videoPlayer?.seekTo(positionMs)
+        audioPlayer.seekTo(positionMs)
+    }
+
+    fun getVideoCurrentPosition(): Long = videoPlayer?.currentPosition ?: 0L
+
+    fun getVideoDuration(): Long = videoPlayer?.duration?.coerceAtLeast(0) ?: 0L
 
     private fun loadSubtitles(uri: String) {
         viewModelScope.launch {
@@ -132,15 +200,27 @@ class PracticeViewModel @Inject constructor(
         positionUpdateJob?.cancel()
         positionUpdateJob = viewModelScope.launch {
             while (isActive) {
-                audioPlayer.updatePosition()
-
-                // Check if single subtitle play reached end
-                if (singleSubtitleIndex >= 0) {
-                    val currentPos = audioPlayer.getCurrentPosition()
-                    if (currentPos >= singleSubtitleEndMs) {
-                        // Reached end of this subtitle, pause and stay here
-                        audioPlayer.pause()
-                        singleSubtitleIndex = -1
+                if (_isVideoMode.value) {
+                    videoPlayer?.let { player ->
+                        val position = player.currentPosition
+                        val duration = player.duration.coerceAtLeast(0)
+                        // Update playback state for UI
+                        audioPlayer.updatePosition()
+                        // Check if single subtitle play reached end
+                        if (singleSubtitleIndex >= 0 && position >= singleSubtitleEndMs) {
+                            pauseVideo()
+                        }
+                    }
+                } else {
+                    audioPlayer.updatePosition()
+                    // Check if single subtitle play reached end
+                    if (singleSubtitleIndex >= 0) {
+                        val currentPos = audioPlayer.getCurrentPosition()
+                        if (currentPos >= singleSubtitleEndMs) {
+                            // Reached end of this subtitle, pause and stay here
+                            audioPlayer.pause()
+                            singleSubtitleIndex = -1
+                        }
                     }
                 }
                 delay(50)
@@ -154,25 +234,45 @@ class PracticeViewModel @Inject constructor(
         singleSubtitleIndex = index
         singleSubtitleEndMs = subtitle.endTimeMs
         seekToSubtitle(subtitle)
-        play()
+        if (_isVideoMode.value) {
+            playVideo()
+        } else {
+            play()
+        }
     }
 
     fun play() {
-        audioPlayer.play()
+        if (_isVideoMode.value) {
+            playVideo()
+        } else {
+            audioPlayer.play()
+        }
     }
 
     fun pause() {
-        audioPlayer.pause()
+        if (_isVideoMode.value) {
+            pauseVideo()
+        } else {
+            audioPlayer.pause()
+        }
         singleSubtitleIndex = -1
     }
 
     fun seekTo(positionMs: Long) {
-        audioPlayer.seekTo(positionMs)
+        if (_isVideoMode.value) {
+            seekVideoTo(positionMs)
+        } else {
+            audioPlayer.seekTo(positionMs)
+        }
     }
 
     // Seek to specific subtitle sentence
     fun seekToSubtitle(subtitle: Subtitle) {
-        audioPlayer.seekTo(subtitle.startTimeMs)
+        if (_isVideoMode.value) {
+            seekVideoTo(subtitle.startTimeMs)
+        } else {
+            audioPlayer.seekTo(subtitle.startTimeMs)
+        }
         currentSubtitleObj = subtitle
         currentSentenceId = subtitle.index
         _currentSubtitleIndex.value = _subtitles.value.indexOf(subtitle)
@@ -180,10 +280,13 @@ class PracticeViewModel @Inject constructor(
 
     fun setPlaybackSpeed(speed: Float) {
         audioPlayer.setPlaybackSpeed(speed)
+        videoPlayer?.setPlaybackSpeed(speed)
     }
 
     fun toggleLooping() {
-        audioPlayer.setLooping(!playbackState.value.isLooping)
+        val newLooping = !playbackState.value.isLooping
+        audioPlayer.setLooping(newLooping)
+        videoPlayer?.repeatMode = if (newLooping) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
     }
 
     fun getCurrentSubtitle(): String? {
@@ -203,13 +306,15 @@ class PracticeViewModel @Inject constructor(
     }
 
     fun seekBackward(ms: Long = 5000) {
-        val newPosition = (audioPlayer.getCurrentPosition() - ms).coerceAtLeast(0)
-        audioPlayer.seekTo(newPosition)
+        val currentPos = if (_isVideoMode.value) getVideoCurrentPosition() else audioPlayer.getCurrentPosition()
+        val newPosition = (currentPos - ms).coerceAtLeast(0)
+        seekTo(newPosition)
     }
 
     fun seekForward(ms: Long = 5000) {
-        val newPosition = (audioPlayer.getCurrentPosition() + ms).coerceAtLeast(0)
-        audioPlayer.seekTo(newPosition)
+        val currentPos = if (_isVideoMode.value) getVideoCurrentPosition() else audioPlayer.getCurrentPosition()
+        val newPosition = (currentPos + ms).coerceAtLeast(0)
+        seekTo(newPosition)
     }
 
     fun saveWord(word: String, translation: String, exampleSentence: String) {
@@ -293,6 +398,7 @@ class PracticeViewModel @Inject constructor(
         super.onCleared()
         positionUpdateJob?.cancel()
         audioPlayer.release()
+        videoPlayer?.release()
         voiceRecorder.release()
         stopPlayingRecording()
     }
