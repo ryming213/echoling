@@ -267,7 +267,8 @@ fun PracticeScreen(
                         onWordLongClick = { word ->
                             selectedWord = word
                             showWordDialog = true
-                        }
+                        },
+                        listIndex = index + 1
                     )
                 }
                 item { Spacer(modifier = Modifier.height(16.dp)) }
@@ -341,7 +342,8 @@ private fun SubtitleCard(
     revealedWords: Set<Int>,
     onClick: () -> Unit,
     onWordReveal: (Int) -> Unit,
-    onWordLongClick: (String) -> Unit
+    onWordLongClick: (String) -> Unit,
+    listIndex: Int = subtitle.index
 ) {
     val cardElevation by animateFloatAsState(
         targetValue = if (isActive) 6f else 1f,
@@ -380,7 +382,7 @@ private fun SubtitleCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "第${subtitle.index}句",
+                        text = "第${listIndex}句",
                         style = MaterialTheme.typography.labelMedium,
                         color = if (isActive)
                             MaterialTheme.colorScheme.primary
