@@ -8,6 +8,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Headphones
 import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.VideoFile
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -27,7 +28,7 @@ import com.echoling.app.presentation.viewmodel.CourseDetailViewModel
 fun CourseDetailScreen(
     courseId: String,
     onNavigateBack: () -> Unit,
-    onNavigateToPractice: (audioUri: String, subtitleUri: String?) -> Unit,
+    onNavigateToPractice: (audioUri: String?, videoUri: String?, subtitleUri: String?) -> Unit,
     viewModel: CourseDetailViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -75,8 +76,8 @@ fun CourseDetailScreen(
                         progress = uiState.progress,
                         onStartLearning = {
                             val course = uiState.course!!
-                            if (course.audioUri.isNotEmpty()) {
-                                onNavigateToPractice(course.audioUri, course.subtitleUri)
+                            if (course.hasAudio() || course.hasVideo()) {
+                                onNavigateToPractice(course.audioUri, course.videoUri, course.subtitleUri)
                             }
                         }
                     )
@@ -92,7 +93,7 @@ private fun CourseDetailContent(
     progress: LearningProgress?,
     onStartLearning: () -> Unit
 ) {
-    val canStart = course.audioUri.isNotEmpty()
+    val canStart = course.hasAudio() || course.hasVideo()
 
     Column(
         modifier = Modifier
@@ -104,7 +105,7 @@ private fun CourseDetailContent(
 
         // Course icon
         Icon(
-            imageVector = Icons.Outlined.Headphones,
+            imageVector = if (course.hasVideo()) Icons.Outlined.VideoFile else Icons.Outlined.Headphones,
             contentDescription = null,
             modifier = Modifier.size(100.dp),
             tint = MaterialTheme.colorScheme.primary
@@ -209,12 +210,12 @@ private fun CourseDetailContent(
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "No Audio Available",
+                            text = "No Media Available",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onErrorContainer
                         )
                         Text(
-                            text = "Import audio to start learning",
+                            text = "Import audio or video to start learning",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.8f)
                         )

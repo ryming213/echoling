@@ -37,7 +37,8 @@ class ImportViewModel @Inject constructor(
 
     fun importCourse(
         title: String,
-        audioUri: Uri,
+        audioUri: Uri?,
+        videoUri: Uri?,
         subtitleUri: Uri?,
         durationMs: Long = 0L
     ) {
@@ -47,14 +48,27 @@ class ImportViewModel @Inject constructor(
             try {
                 val context = application.applicationContext
 
-                // Copy audio file to app's internal storage
-                val audioFileName = "course_${System.currentTimeMillis()}_audio.mp3"
-                val audioFile = copyUriToInternalStorage(context, audioUri, audioFileName)
-
-                if (audioFile == null) {
-                    _errorMessage.value = "Failed to import audio file"
+                // Must have either audio or video
+                if (audioUri == null && videoUri == null) {
+                    _errorMessage.value = "Please select an audio or video file"
                     _importState.value = ImportState.ERROR
                     return@launch
+                }
+
+                // Copy audio file to app's internal storage
+                var audioFile: File? = null
+                if (audioUri != null) {
+                    val extension = getMediaExtension(audioUri, "mp3")
+                    val audioFileName = "course_${System.currentTimeMillis()}_audio.$extension"
+                    audioFile = copyUriToInternalStorage(context, audioUri, audioFileName)
+                }
+
+                // Copy video file to app's internal storage
+                var videoFile: File? = null
+                if (videoUri != null) {
+                    val extension = getMediaExtension(videoUri, "mp4")
+                    val videoFileName = "course_${System.currentTimeMillis()}_video.$extension"
+                    videoFile = copyUriToInternalStorage(context, videoUri, videoFileName)
                 }
 
                 // Copy subtitle file if provided
@@ -71,7 +85,8 @@ class ImportViewModel @Inject constructor(
                     title = title,
                     description = "Imported course: $title",
                     difficulty = "Intermediate",
-                    audioUri = audioFile.absolutePath,
+                    audioUri = audioFile?.absolutePath,
+                    videoUri = videoFile?.absolutePath,
                     subtitleUri = subtitleFile?.absolutePath,
                     durationMs = durationMs,
                     totalSentences = 0,
@@ -120,6 +135,22 @@ class ImportViewModel @Inject constructor(
             mimeType?.contains("ass") == true -> "ass"
             mimeType?.contains("ssa") == true -> "ssa"
             else -> uri.lastPathSegment?.substringAfterLast('.', "srt") ?: "srt"
+        }
+    }
+
+    private fun getMediaExtension(uri: Uri, defaultExt: String): String {
+        val mimeType = application.contentResolver.getType(uri)
+        return when {
+            mimeType?.contains("mp3") == true -> "mp3"
+            mimeType?.contains("mpeg") == true -> "mp3"
+            mimeType?.contains("mp4") == true -> "mp4"
+            mimeType?.contains("mkv") == true -> "mkv"
+            mimeType?.contains("webm") == true -> "webm"
+            mimeType?.contains("avi") == true -> "avi"
+            mimeType?.contains("m4a") == true -> "m4a"
+            mimeType?.contains("wav") == true -> "wav"
+            mimeType?.contains("flac") == true -> "flac"
+            else -> uri.lastPathSegment?.substringAfterLast('.', defaultExt) ?: defaultExt
         }
     }
 

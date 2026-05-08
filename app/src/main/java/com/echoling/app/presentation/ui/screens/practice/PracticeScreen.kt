@@ -49,6 +49,7 @@ fun PracticeScreen(
     courseId: String,
     onNavigateBack: () -> Unit,
     audioUri: String? = null,
+    videoUri: String? = null,
     subtitleUri: String? = null,
     viewModel: PracticeViewModel = hiltViewModel()
 ) {
@@ -91,8 +92,9 @@ fun PracticeScreen(
 
     LaunchedEffect(Unit) {
         viewModel.initializePlayer()
-        if (!audioUri.isNullOrBlank()) {
-            viewModel.loadMedia(audioUri, subtitleUri, courseId)
+        val mediaUri = if (!videoUri.isNullOrBlank()) videoUri else audioUri
+        if (!mediaUri.isNullOrBlank()) {
+            viewModel.loadMedia(mediaUri, subtitleUri, courseId)
         }
     }
 
