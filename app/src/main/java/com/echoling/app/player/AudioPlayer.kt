@@ -106,6 +106,25 @@ class AudioPlayer @Inject constructor(
         }
     }
 
+    fun updatePositionFromExternal(position: Long, duration: Long, isPlaying: Boolean = false) {
+        updateState {
+            it.copy(
+                currentPositionMs = position,
+                durationMs = duration,
+                isPlaying = isPlaying
+            )
+        }
+        subtitleProvider?.invoke(position)?.let { subtitle ->
+            _currentSubtitle.value = subtitle
+        }
+    }
+
+    private var videoPlayer: ExoPlayer? = null
+
+    fun setVideoPlayer(player: ExoPlayer?) {
+        videoPlayer = player
+    }
+
     fun release() {
         exoPlayer?.release()
         exoPlayer = null

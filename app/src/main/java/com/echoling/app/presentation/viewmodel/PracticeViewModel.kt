@@ -158,6 +158,7 @@ class PracticeViewModel @Inject constructor(
                 setMediaItem(mediaItem)
                 prepare()
             }
+            audioPlayer.setVideoPlayer(videoPlayer)
         } catch (e: Exception) {
             e.printStackTrace()
             return
@@ -251,8 +252,8 @@ class PracticeViewModel @Inject constructor(
                     videoPlayer?.let { player ->
                         val position = player.currentPosition
                         val duration = player.duration.coerceAtLeast(0)
-                        // Update playback state for UI
-                        audioPlayer.updatePosition()
+                        // Update playback state from video player
+                        audioPlayer.updatePositionFromExternal(position, duration, player.isPlaying)
                         // Check if single subtitle play reached end
                         if (singleSubtitleIndex >= 0 && position >= singleSubtitleEndMs) {
                             pauseVideo()
