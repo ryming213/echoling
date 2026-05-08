@@ -28,7 +28,7 @@ import com.echoling.app.presentation.viewmodel.CourseDetailViewModel
 fun CourseDetailScreen(
     courseId: String,
     onNavigateBack: () -> Unit,
-    onNavigateToPractice: (audioUri: String?, videoUri: String?, subtitleUri: String?) -> Unit,
+    onNavigateToPractice: (courseId: String) -> Unit,
     viewModel: CourseDetailViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -77,11 +77,7 @@ fun CourseDetailScreen(
                         onStartLearning = {
                             val course = uiState.course!!
                             if (course.hasAudio() || course.hasVideo()) {
-                                onNavigateToPractice(
-                                    course.audioUri ?: "",
-                                    course.videoUri ?: "",
-                                    course.subtitleUri
-                                )
+                                onNavigateToPractice(course.courseId)
                             }
                         }
                     )

@@ -8,7 +8,9 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import com.echoling.app.domain.model.Course
 import com.echoling.app.domain.model.Word
+import com.echoling.app.domain.repository.CourseRepository
 import com.echoling.app.domain.repository.WordRepository
 import com.echoling.app.player.AudioPlayer
 import com.echoling.app.player.PlaybackState
@@ -32,6 +34,7 @@ import javax.inject.Inject
 @HiltViewModel
 class PracticeViewModel @Inject constructor(
     private val application: Application,
+    private val courseRepository: CourseRepository,
     private val audioPlayer: AudioPlayer,
     private val subtitleParserFactory: SubtitleParserFactory,
     private val wordRepository: WordRepository,
@@ -77,6 +80,32 @@ class PracticeViewModel @Inject constructor(
 
     fun initializePlayer() {
         audioPlayer.initialize()
+    }
+
+    fun loadCourse(courseId: String) {
+        if (courseId.isBlank()) return
+        currentCourseId = courseId
+
+        viewModelScope.launch {
+            try {
+                val course = courseRepository.getCourseById(courseId)
+                if (course == null) {
+                    android.util.Log.e("PracticeViewModel", "Course not found: $courseId")
+                    return@launch
+                }
+
+                if (course.hasVideo() && course.videoUri.isNullOrBlank().not()) {
+                    loadVideo(course.videoUri!!, course.subtitleUri, courseId)
+                } else if (course.hasAudio() && course.audioUri.isNullOrBlank().not()) {
+                    loadMedia(course.audioUri!!, course.subtitleUri, courseId)
+                } else {
+                    android.util.Log.e("PracticeViewModel", "No media available for course: $courseId")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("PracticeViewModel", "Error loading course: ${e.message}")
+                e.printStackTrace()
+            }
+        }
     }
 
     fun loadMedia(audioUri: String, subtitleUri: String?, courseId: String = "") {

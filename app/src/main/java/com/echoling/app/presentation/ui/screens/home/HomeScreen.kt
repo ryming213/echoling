@@ -29,7 +29,7 @@ import com.echoling.app.presentation.viewmodel.HomeViewModel
 fun HomeScreen(
     onNavigateToCourseList: () -> Unit,
     onNavigateToVocabulary: () -> Unit,
-    onNavigateToPractice: (courseId: String, audioUri: String?, videoUri: String?, subtitleUri: String?) -> Unit,
+    onNavigateToPractice: (courseId: String) -> Unit,
     onNavigateToStatistics: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
@@ -75,12 +75,7 @@ fun HomeScreen(
                     progress = uiState.continueLearning!!.progress.finishRate,
                     onClick = {
                         val item = uiState.continueLearning!!
-                        onNavigateToPractice(
-                            item.course.courseId,
-                            item.course.audioUri ?: "",
-                            item.course.videoUri ?: "",
-                            item.course.subtitleUri
-                        )
+                        onNavigateToPractice(item.course.courseId)
                     }
                 )
                 Spacer(modifier = Modifier.height(24.dp))

@@ -52,9 +52,6 @@ import com.echoling.app.speech.RecordingState
 fun PracticeScreen(
     courseId: String,
     onNavigateBack: () -> Unit,
-    audioUri: String? = null,
-    videoUri: String? = null,
-    subtitleUri: String? = null,
     viewModel: PracticeViewModel = hiltViewModel()
 ) {
     val playbackState by viewModel.playbackState.collectAsState()
@@ -96,16 +93,10 @@ fun PracticeScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(courseId) {
         try {
             viewModel.initializePlayer()
-            val video = videoUri?.takeIf { it.isNotBlank() }
-            val audio = audioUri?.takeIf { it.isNotBlank() }
-            if (video != null) {
-                viewModel.loadVideo(video, subtitleUri, courseId)
-            } else if (audio != null) {
-                viewModel.loadMedia(audio, subtitleUri, courseId)
-            }
+            viewModel.loadCourse(courseId)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -114,12 +105,6 @@ fun PracticeScreen(
     LaunchedEffect(playbackState.currentPositionMs, subtitleMode) {
         currentSubtitle = viewModel.getCurrentSubtitle()
     }
-
-    // Background gradient colors
-    val surfaceGradient = listOf(
-        MaterialTheme.colorScheme.background,
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-    )
 
     Scaffold(
         topBar = {
