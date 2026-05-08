@@ -1,0 +1,25 @@
+# Gradle
+.gradle/
+build/
+*.apk
+*.aab
+
+# Android Studio
+.idea/
+*.iml
+local.properties
+
+# Build outputs
+*.jar
+*.class
+*.dex
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Font files (these are custom, you may want to keep them)
+# res/font/*.ttf
