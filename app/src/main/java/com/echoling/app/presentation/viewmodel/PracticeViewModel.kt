@@ -233,11 +233,13 @@ class PracticeViewModel @Inject constructor(
                             positionMs >= sub.startTimeMs - 100 && positionMs <= sub.endTimeMs + 100
                         }
                         if (sub != null) {
+                            android.util.Log.d("PracticeViewModel", "subtitleProvider: pos=$positionMs, matched index=${sub.index}, listIndex=${parsed.indexOf(sub)}")
                             currentSubtitleObj = sub
                             currentSentenceId = sub.index
                             _currentSubtitleIndex.value = parsed.indexOf(sub)
                             sub.contentEn
                         } else {
+                            android.util.Log.d("PracticeViewModel", "subtitleProvider: pos=$positionMs, no match found")
                             null
                         }
                     }
@@ -283,6 +285,7 @@ class PracticeViewModel @Inject constructor(
     // Play a single subtitle once and stop
     fun playSubtitleOnce(subtitle: Subtitle) {
         val index = _subtitles.value.indexOf(subtitle)
+        android.util.Log.d("PracticeViewModel", "playSubtitleOnce: subtitle.index=${subtitle.index}, listIndex=$index, total=${_subtitles.value.size}")
         singleSubtitleIndex = index
         singleSubtitleEndMs = subtitle.endTimeMs
         seekToSubtitle(subtitle)
@@ -320,6 +323,7 @@ class PracticeViewModel @Inject constructor(
 
     // Seek to specific subtitle sentence
     fun seekToSubtitle(subtitle: Subtitle) {
+        android.util.Log.d("PracticeViewModel", "seekToSubtitle: index=${subtitle.index}, startTime=${subtitle.startTimeMs}")
         if (_isVideoMode.value) {
             seekVideoTo(subtitle.startTimeMs)
         } else {
