@@ -196,25 +196,6 @@ fun PracticeScreen(
                 onSeek = { viewModel.seekTo(it) }
             )
 
-            // Recording Section
-            if (showRecordingUI) {
-                RecordingSection(
-                    recordingState = recordingState,
-                    recordingPath = recordingPath,
-                    isPlayingRecording = isPlayingRecording,
-                    onStartRecording = {
-                        if (hasRecordPermission) {
-                            viewModel.startRecording()
-                        } else {
-                            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                        }
-                    },
-                    onStopRecording = { viewModel.stopRecording() },
-                    onPlayRecording = { viewModel.playRecording() },
-                    onStopPlayingRecording = { viewModel.stopPlayingRecording() }
-                )
-            }
-
             // Subtitle List Header
             Row(
                 modifier = Modifier
@@ -274,47 +255,158 @@ fun PracticeScreen(
                 item { Spacer(modifier = Modifier.height(16.dp)) }
             }
 
-            // Bottom Toggle Button
-            Surface(
+            // Bottom Controls Row
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                shape = RoundedCornerShape(16.dp),
-                color = if (allRevealed)
-                    MaterialTheme.colorScheme.surfaceVariant
-                else
-                    MaterialTheme.colorScheme.primary
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Button(
+                // Left: Toggle visibility button
+                Surface(
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (allRevealed)
+                        MaterialTheme.colorScheme.surfaceVariant
+                    else
+                        MaterialTheme.colorScheme.primary,
                     onClick = {
                         allRevealed = !allRevealed
                         if (allRevealed) {
                             revealedWords = emptyMap()
                         }
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (allRevealed) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = if (allRevealed)
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            else
+                                MaterialTheme.colorScheme.onPrimary
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (allRevealed) "隐藏" else "显示",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = if (allRevealed)
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            else
+                                MaterialTheme.colorScheme.onPrimary
+                        )
+                    }
+                }
+
+                // Center: Play/Pause button
+                FilledIconButton(
+                    onClick = {
+                        if (playbackState.isPlaying) viewModel.pause() else viewModel.play()
                     },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color.Transparent,
-                        contentColor = if (allRevealed)
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        else
-                            MaterialTheme.colorScheme.onPrimary
+                    modifier = Modifier.size(48.dp),
+                    shape = CircleShape,
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.primary
                     )
                 ) {
                     Icon(
-                        imageVector = if (allRevealed) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp)
+                        imageVector = if (playbackState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (playbackState.isPlaying) "暂停" else "播放",
+                        modifier = Modifier.size(24.dp),
+                        tint = MaterialTheme.colorScheme.onPrimary
                     )
+                }
+
+                // Right: Recording controls
+                Row(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Record button
+                    val buttonScale by animateFloatAsState(
+                        targetValue = if (recordingState == RecordingState.RECORDING) 1.1f else 1f,
+                        animationSpec = spring(stiffness = Spring.StiffnessLow),
+                        label = "record_btn_scale"
+                    )
+
+                    IconButton(
+                        onClick = {
+                            if (recordingState == RecordingState.RECORDING) {
+                                viewModel.stopRecording()
+                            } else {
+                                if (hasRecordPermission) {
+                                    viewModel.startRecording()
+                                } else {
+                                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .size(40.dp)
+                            .graphicsLayer {
+                                scaleX = buttonScale
+                                scaleY = buttonScale
+                            }
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = if (recordingState == RecordingState.RECORDING)
+                                Color.Red
+                            else
+                                MaterialTheme.colorScheme.secondaryContainer
+                        ) {
+                            Icon(
+                                imageVector = if (recordingState == RecordingState.RECORDING)
+                                    Icons.Default.Stop
+                                else
+                                    Icons.Default.Mic,
+                                contentDescription = "录音",
+                                tint = if (recordingState == RecordingState.RECORDING)
+                                    Color.White
+                                else
+                                    MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = if (allRevealed) "全部隐藏" else "全部显示",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Medium
-                    )
+
+                    // Play recording button
+                    if (recordingPath != null && recordingState != RecordingState.RECORDING) {
+                        IconButton(
+                            onClick = if (isPlayingRecording) {{ viewModel.stopPlayingRecording() }} else {{ viewModel.playRecording() }},
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = if (isPlayingRecording)
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.surfaceVariant
+                            ) {
+                                Icon(
+                                    imageVector = if (isPlayingRecording) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                    contentDescription = if (isPlayingRecording) "停止" else "播放录音",
+                                    modifier = Modifier.size(18.dp),
+                                    tint = if (isPlayingRecording)
+                                        Color.White
+                                    else
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
