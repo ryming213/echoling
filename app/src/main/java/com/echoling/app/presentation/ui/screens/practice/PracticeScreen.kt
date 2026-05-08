@@ -99,10 +99,12 @@ fun PracticeScreen(
     LaunchedEffect(Unit) {
         try {
             viewModel.initializePlayer()
-            if (!videoUri.isNullOrBlank()) {
-                viewModel.loadVideo(videoUri, subtitleUri, courseId)
-            } else if (!audioUri.isNullOrBlank()) {
-                viewModel.loadMedia(audioUri, subtitleUri, courseId)
+            val video = videoUri?.takeIf { it.isNotBlank() }
+            val audio = audioUri?.takeIf { it.isNotBlank() }
+            if (video != null) {
+                viewModel.loadVideo(video, subtitleUri, courseId)
+            } else if (audio != null) {
+                viewModel.loadMedia(audio, subtitleUri, courseId)
             }
         } catch (e: Exception) {
             e.printStackTrace()

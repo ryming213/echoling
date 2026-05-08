@@ -77,8 +77,8 @@ fun HomeScreen(
                         val item = uiState.continueLearning!!
                         onNavigateToPractice(
                             item.course.courseId,
-                            item.course.audioUri,
-                            item.course.videoUri,
+                            item.course.audioUri ?: "",
+                            item.course.videoUri ?: "",
                             item.course.subtitleUri
                         )
                     }

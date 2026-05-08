@@ -77,7 +77,11 @@ fun CourseDetailScreen(
                         onStartLearning = {
                             val course = uiState.course!!
                             if (course.hasAudio() || course.hasVideo()) {
-                                onNavigateToPractice(course.audioUri, course.videoUri, course.subtitleUri)
+                                onNavigateToPractice(
+                                    course.audioUri ?: "",
+                                    course.videoUri ?: "",
+                                    course.subtitleUri
+                                )
                             }
                         }
                     )
