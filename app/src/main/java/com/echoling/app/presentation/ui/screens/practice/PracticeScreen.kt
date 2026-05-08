@@ -97,11 +97,15 @@ fun PracticeScreen(
     }
 
     LaunchedEffect(Unit) {
-        viewModel.initializePlayer()
-        if (!videoUri.isNullOrBlank()) {
-            viewModel.loadVideo(videoUri, subtitleUri, courseId)
-        } else if (!audioUri.isNullOrBlank()) {
-            viewModel.loadMedia(audioUri, subtitleUri, courseId)
+        try {
+            viewModel.initializePlayer()
+            if (!videoUri.isNullOrBlank()) {
+                viewModel.loadVideo(videoUri, subtitleUri, courseId)
+            } else if (!audioUri.isNullOrBlank()) {
+                viewModel.loadMedia(audioUri, subtitleUri, courseId)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
