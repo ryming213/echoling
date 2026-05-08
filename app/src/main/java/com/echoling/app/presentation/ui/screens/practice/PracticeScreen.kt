@@ -333,13 +333,7 @@ fun PracticeScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Record button
-                    val buttonScale by animateFloatAsState(
-                        targetValue = if (recordingState == RecordingState.RECORDING) 1.1f else 1f,
-                        animationSpec = spring(stiffness = Spring.StiffnessLow),
-                        label = "record_btn_scale"
-                    )
-
-                    IconButton(
+                    FilledIconButton(
                         onClick = {
                             if (recordingState == RecordingState.RECORDING) {
                                 viewModel.stopRecording()
@@ -351,60 +345,53 @@ fun PracticeScreen(
                                 }
                             }
                         },
-                        modifier = Modifier
-                            .size(40.dp)
-                            .graphicsLayer {
-                                scaleX = buttonScale
-                                scaleY = buttonScale
-                            }
-                    ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = if (recordingState == RecordingState.RECORDING)
+                        modifier = Modifier.size(48.dp),
+                        shape = CircleShape,
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = if (recordingState == RecordingState.RECORDING)
                                 Color.Red
                             else
                                 MaterialTheme.colorScheme.secondaryContainer
-                        ) {
-                            Icon(
-                                imageVector = if (recordingState == RecordingState.RECORDING)
-                                    Icons.Default.Stop
-                                else
-                                    Icons.Default.Mic,
-                                contentDescription = "录音",
-                                tint = if (recordingState == RecordingState.RECORDING)
-                                    Color.White
-                                else
-                                    MaterialTheme.colorScheme.onSecondaryContainer,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
+                        )
+                    ) {
+                        Icon(
+                            imageVector = if (recordingState == RecordingState.RECORDING)
+                                Icons.Default.Stop
+                            else
+                                Icons.Default.Mic,
+                            contentDescription = "录音",
+                            modifier = Modifier.size(24.dp),
+                            tint = if (recordingState == RecordingState.RECORDING)
+                                Color.White
+                            else
+                                MaterialTheme.colorScheme.onSecondaryContainer
+                        )
                     }
 
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(12.dp))
 
                     // Play recording button
                     if (recordingPath != null && recordingState != RecordingState.RECORDING) {
-                        IconButton(
+                        FilledIconButton(
                             onClick = if (isPlayingRecording) {{ viewModel.stopPlayingRecording() }} else {{ viewModel.playRecording() }},
-                            modifier = Modifier.size(40.dp)
-                        ) {
-                            Surface(
-                                shape = CircleShape,
-                                color = if (isPlayingRecording)
+                            modifier = Modifier.size(48.dp),
+                            shape = CircleShape,
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = if (isPlayingRecording)
                                     MaterialTheme.colorScheme.primary
                                 else
-                                    MaterialTheme.colorScheme.surfaceVariant
-                            ) {
-                                Icon(
-                                    imageVector = if (isPlayingRecording) Icons.Default.Stop else Icons.Default.PlayArrow,
-                                    contentDescription = if (isPlayingRecording) "停止" else "播放录音",
-                                    modifier = Modifier.size(18.dp),
-                                    tint = if (isPlayingRecording)
-                                        Color.White
-                                    else
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                                    MaterialTheme.colorScheme.secondaryContainer
+                            )
+                        ) {
+                            Icon(
+                                imageVector = if (isPlayingRecording) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                contentDescription = if (isPlayingRecording) "停止" else "播放录音",
+                                modifier = Modifier.size(24.dp),
+                                tint = if (isPlayingRecording)
+                                    Color.White
+                                else
+                                    MaterialTheme.colorScheme.onSecondaryContainer
+                            )
                         }
                     }
                 }
