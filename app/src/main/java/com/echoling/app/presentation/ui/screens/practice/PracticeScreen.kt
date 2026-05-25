@@ -76,11 +76,12 @@ fun PracticeScreen(
 
     val lazyListState = rememberLazyListState()
 
-    // Auto-scroll to current subtitle when it changes, but only if user is not manually scrolling
+    // Auto-scroll to position current subtitle in upper-middle of screen for better visibility
     LaunchedEffect(currentSubtitleIndex) {
         if (currentSubtitleIndex >= 0 && subtitles.isNotEmpty() && !lazyListState.isScrollInProgress) {
             val index = currentSubtitleIndex.coerceIn(0, subtitles.size - 1)
-            lazyListState.animateScrollToItem(index, scrollOffset = -80)
+            // Position at top of viewport (offset 0) so previous subtitle is also visible
+            lazyListState.animateScrollToItem(index, scrollOffset = 0)
         }
     }
 
