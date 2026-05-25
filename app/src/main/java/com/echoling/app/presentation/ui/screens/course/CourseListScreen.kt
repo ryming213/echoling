@@ -261,7 +261,7 @@ private fun CourseCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(min = 48.dp)
+                        modifier = Modifier.widthIn(min = 60.dp)
                     )
                 }
             }
