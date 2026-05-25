@@ -9,8 +9,10 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.echoling.app.domain.model.Course
+import com.echoling.app.domain.model.LearningProgress
 import com.echoling.app.domain.model.Word
 import com.echoling.app.domain.repository.CourseRepository
+import com.echoling.app.domain.repository.LearningProgressRepository
 import com.echoling.app.domain.repository.WordRepository
 import com.echoling.app.player.AudioPlayer
 import com.echoling.app.player.PlaybackState
@@ -35,6 +37,7 @@ import javax.inject.Inject
 class PracticeViewModel @Inject constructor(
     private val application: Application,
     private val courseRepository: CourseRepository,
+    private val learningProgressRepository: LearningProgressRepository,
     private val audioPlayer: AudioPlayer,
     private val subtitleParserFactory: SubtitleParserFactory,
     private val wordRepository: WordRepository,
@@ -94,12 +97,21 @@ class PracticeViewModel @Inject constructor(
                     return@launch
                 }
 
+                // Load saved progress first
+                val savedProgress = learningProgressRepository.getProgressByCourseId(courseId)
+
                 if (course.hasVideo() && course.videoUri.isNullOrBlank().not()) {
                     loadVideo(course.videoUri!!, course.subtitleUri, courseId)
                 } else if (course.hasAudio() && course.audioUri.isNullOrBlank().not()) {
                     loadMedia(course.audioUri!!, course.subtitleUri, courseId)
                 } else {
                     android.util.Log.e("PracticeViewModel", "No media available for course: $courseId")
+                }
+
+                // Restore saved position after media is loaded
+                if (savedProgress != null && savedProgress.currentPositionMs > 0) {
+                    android.util.Log.d("PracticeViewModel", "Restoring position: ${savedProgress.currentPositionMs}ms")
+                    seekTo(savedProgress.currentPositionMs)
                 }
             } catch (e: Exception) {
                 android.util.Log.e("PracticeViewModel", "Error loading course: ${e.message}")
@@ -450,6 +462,30 @@ class PracticeViewModel @Inject constructor(
 
     fun isRecordingPlaying(): Boolean = _isPlayingRecording.value
 
+    fun saveProgress() {
+        viewModelScope.launch {
+            try {
+                val currentPos = if (_isVideoMode.value) getVideoCurrentPosition() else audioPlayer.getCurrentPosition()
+                val duration = if (_isVideoMode.value) getVideoDuration() else audioPlayer.getDuration()
+
+                val existingProgress = learningProgressRepository.getProgressByCourseId(currentCourseId)
+                val newProgress = LearningProgress(
+                    courseId = currentCourseId,
+                    currentPositionMs = currentPos,
+                    currentSentenceId = currentSentenceId,
+                    learnedSentences = existingProgress?.learnedSentences ?: 0,
+                    totalLearnTimeMs = existingProgress?.totalLearnTimeMs ?: 0,
+                    lastLearnTime = System.currentTimeMillis(),
+                    finishRate = if (duration > 0) currentPos.toFloat() / duration.toFloat() else 0f
+                )
+                learningProgressRepository.saveProgress(newProgress)
+                android.util.Log.d("PracticeViewModel", "Progress saved: pos=$currentPos, sentenceId=$currentSentenceId")
+            } catch (e: Exception) {
+                android.util.Log.e("PracticeViewModel", "Error saving progress: ${e.message}")
+            }
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         positionUpdateJob?.cancel()
@@ -457,5 +493,6 @@ class PracticeViewModel @Inject constructor(
         videoPlayer?.release()
         voiceRecorder.release()
         stopPlayingRecording()
+        saveProgress()
     }
 }
