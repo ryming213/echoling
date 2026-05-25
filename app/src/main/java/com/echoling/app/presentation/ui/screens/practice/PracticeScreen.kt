@@ -259,47 +259,32 @@ fun PracticeScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Left: Toggle visibility button
-                Surface(
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (allRevealed)
-                        MaterialTheme.colorScheme.surfaceVariant
-                    else
-                        MaterialTheme.colorScheme.primary,
+                // Left: Toggle visibility button - circular
+                IconButton(
                     onClick = {
                         allRevealed = !allRevealed
                         if (allRevealed) {
                             revealedWords = emptyMap()
                         }
-                    }
+                    },
+                    modifier = Modifier.size(44.dp)
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
+                    Surface(
+                        shape = CircleShape,
+                        color = if (allRevealed)
+                            MaterialTheme.colorScheme.surfaceVariant
+                        else
+                            MaterialTheme.colorScheme.primary
                     ) {
                         Icon(
                             imageVector = if (allRevealed) Icons.Default.VisibilityOff else Icons.Default.Visibility,
                             contentDescription = null,
-                            modifier = Modifier.size(18.dp),
+                            modifier = Modifier.size(22.dp),
                             tint = if (allRevealed)
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            else
-                                MaterialTheme.colorScheme.onPrimary
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (allRevealed) "隐藏" else "显示",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = if (allRevealed)
                                 MaterialTheme.colorScheme.onSurfaceVariant
                             else
                                 MaterialTheme.colorScheme.onPrimary
@@ -307,12 +292,14 @@ fun PracticeScreen(
                     }
                 }
 
-                // Center: Play/Pause button
+                Spacer(modifier = Modifier.width(4.dp))
+
+                // Center: Play/Pause button - circular
                 IconButton(
                     onClick = {
                         if (playbackState.isPlaying) viewModel.pause() else viewModel.play()
                     },
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(44.dp)
                 ) {
                     Surface(
                         shape = CircleShape,
@@ -321,19 +308,20 @@ fun PracticeScreen(
                         Icon(
                             imageVector = if (playbackState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                             contentDescription = if (playbackState.isPlaying) "暂停" else "播放",
-                            modifier = Modifier.size(20.dp),
+                            modifier = Modifier.size(22.dp),
                             tint = MaterialTheme.colorScheme.onPrimary
                         )
                     }
                 }
 
+                Spacer(modifier = Modifier.width(4.dp))
+
                 // Right: Recording controls
                 Row(
-                    modifier = Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.End,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Record button
+                    // Record button - circular
                     IconButton(
                         onClick = {
                             if (recordingState == RecordingState.RECORDING) {
@@ -346,7 +334,7 @@ fun PracticeScreen(
                                 }
                             }
                         },
-                        modifier = Modifier.size(40.dp)
+                        modifier = Modifier.size(44.dp)
                     ) {
                         Surface(
                             shape = CircleShape,
@@ -361,7 +349,7 @@ fun PracticeScreen(
                                 else
                                     Icons.Default.Mic,
                                 contentDescription = "录音",
-                                modifier = Modifier.size(18.dp),
+                                modifier = Modifier.size(22.dp),
                                 tint = if (recordingState == RecordingState.RECORDING)
                                     Color.White
                                 else
@@ -370,13 +358,11 @@ fun PracticeScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    // Play recording button
+                    // Play recording button - circular
                     if (recordingPath != null && recordingState != RecordingState.RECORDING) {
                         IconButton(
                             onClick = if (isPlayingRecording) {{ viewModel.stopPlayingRecording() }} else {{ viewModel.playRecording() }},
-                            modifier = Modifier.size(40.dp)
+                            modifier = Modifier.size(44.dp)
                         ) {
                             Surface(
                                 shape = CircleShape,
@@ -388,7 +374,7 @@ fun PracticeScreen(
                                 Icon(
                                     imageVector = if (isPlayingRecording) Icons.Default.Stop else Icons.Default.PlayArrow,
                                     contentDescription = if (isPlayingRecording) "停止" else "播放录音",
-                                    modifier = Modifier.size(18.dp),
+                                    modifier = Modifier.size(22.dp),
                                     tint = if (isPlayingRecording)
                                         Color.White
                                     else
