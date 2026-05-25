@@ -99,6 +99,7 @@ class PracticeViewModel @Inject constructor(
 
                 // Load saved progress first
                 val savedProgress = learningProgressRepository.getProgressByCourseId(courseId)
+                android.util.Log.d("PracticeViewModel", "Loaded saved progress: ${savedProgress?.currentPositionMs}ms")
 
                 if (course.hasVideo() && course.videoUri.isNullOrBlank().not()) {
                     loadVideo(course.videoUri!!, course.subtitleUri, courseId)
@@ -108,9 +109,10 @@ class PracticeViewModel @Inject constructor(
                     android.util.Log.e("PracticeViewModel", "No media available for course: $courseId")
                 }
 
-                // Restore saved position after media is loaded
+                // Restore saved position after media is loaded - use delay to wait for prepare
                 if (savedProgress != null && savedProgress.currentPositionMs > 0) {
                     android.util.Log.d("PracticeViewModel", "Restoring position: ${savedProgress.currentPositionMs}ms")
+                    delay(500) // Wait for media to prepare
                     seekTo(savedProgress.currentPositionMs)
                 }
             } catch (e: Exception) {
