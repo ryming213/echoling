@@ -313,7 +313,7 @@ fun PracticeScreen(
                     }
                 }
 
-                // Right: Recording controls (two buttons when recording exists)
+                // Right: Recording controls (always show both buttons)
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -355,8 +355,8 @@ fun PracticeScreen(
                         }
                     }
 
-                    // Play recording button (only visible when recording exists)
-                    if (recordingPath != null && recordingState != RecordingState.RECORDING) {
+                    // Play recording button (always visible when recording exists)
+                    if (recordingPath != null) {
                         IconButton(
                             onClick = if (isPlayingRecording) {{ viewModel.stopPlayingRecording() }} else {{ viewModel.playRecording() }},
                             modifier = Modifier.size(54.dp)
