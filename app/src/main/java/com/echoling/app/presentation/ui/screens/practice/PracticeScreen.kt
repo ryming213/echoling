@@ -76,7 +76,13 @@ fun PracticeScreen(
 
     val lazyListState = rememberLazyListState()
 
-    // Auto-scroll disabled - let user scroll manually
+    // Auto-scroll to current subtitle when it changes, but only if user is not manually scrolling
+    LaunchedEffect(currentSubtitleIndex) {
+        if (currentSubtitleIndex >= 0 && subtitles.isNotEmpty() && !lazyListState.isScrollInProgress) {
+            val index = currentSubtitleIndex.coerceIn(0, subtitles.size - 1)
+            lazyListState.animateScrollToItem(index, scrollOffset = -80)
+        }
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
