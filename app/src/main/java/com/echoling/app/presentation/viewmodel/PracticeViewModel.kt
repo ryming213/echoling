@@ -60,6 +60,7 @@ class PracticeViewModel @Inject constructor(
     private var positionUpdateJob: Job? = null
     private var currentCourseId: String = ""
     private var currentSentenceId: Int = 0
+    private var sessionStartTimeMs: Long = 0L
 
     // For playing single subtitle once
     private var singleSubtitleIndex: Int = -1
@@ -88,6 +89,7 @@ class PracticeViewModel @Inject constructor(
     fun loadCourse(courseId: String) {
         if (courseId.isBlank()) return
         currentCourseId = courseId
+        sessionStartTimeMs = System.currentTimeMillis()
 
         viewModelScope.launch {
             try {
@@ -475,18 +477,23 @@ class PracticeViewModel @Inject constructor(
                 val currentPos = if (_isVideoMode.value) getVideoCurrentPosition() else audioPlayer.getCurrentPosition()
                 val duration = if (_isVideoMode.value) getVideoDuration() else audioPlayer.getDuration()
 
+                // Calculate session time
+                val sessionTimeMs = if (sessionStartTimeMs > 0) {
+                    System.currentTimeMillis() - sessionStartTimeMs
+                } else 0L
+
                 val existingProgress = learningProgressRepository.getProgressByCourseId(currentCourseId)
                 val newProgress = LearningProgress(
                     courseId = currentCourseId,
                     currentPositionMs = currentPos,
                     currentSentenceId = currentSentenceId,
                     learnedSentences = existingProgress?.learnedSentences ?: 0,
-                    totalLearnTimeMs = existingProgress?.totalLearnTimeMs ?: 0,
+                    totalLearnTimeMs = (existingProgress?.totalLearnTimeMs ?: 0) + sessionTimeMs,
                     lastLearnTime = System.currentTimeMillis(),
                     finishRate = if (duration > 0) currentPos.toFloat() / duration.toFloat() else 0f
                 )
                 learningProgressRepository.saveProgress(newProgress)
-                android.util.Log.d("PracticeViewModel", "Progress saved: courseId=$currentCourseId, pos=$currentPos, duration=$duration, sentenceId=$currentSentenceId")
+                android.util.Log.d("PracticeViewModel", "Progress saved: courseId=$currentCourseId, pos=$currentPos, duration=$duration, sessionTime=$sessionTimeMs")
             } catch (e: Exception) {
                 android.util.Log.e("PracticeViewModel", "Error saving progress: ${e.message}")
             }
