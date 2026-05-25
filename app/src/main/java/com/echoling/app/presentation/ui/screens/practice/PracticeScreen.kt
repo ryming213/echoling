@@ -671,9 +671,9 @@ private fun PlaybackControlsBar(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = 12.dp, vertical = 4.dp)
     ) {
-        // Progress bar
+        // Progress bar - compact height
         var sliderPosition by remember(currentPosition) { mutableFloatStateOf(currentPosition.toFloat()) }
         var isDragging by remember { mutableStateOf(false) }
 
@@ -693,7 +693,8 @@ private fun PlaybackControlsBar(
                 activeTrackColor = MaterialTheme.colorScheme.primary,
                 inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant
             ),
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            enabled = duration > 0
         )
 
         LaunchedEffect(currentPosition) {
@@ -702,28 +703,28 @@ private fun PlaybackControlsBar(
             }
         }
 
-        // Time and controls row
+        // Time and controls row - compact
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Time
+            // Time - smaller text
             Text(
                 text = formatTime(currentPosition),
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            // Controls
+            // Controls - smaller buttons
             Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Loop
                 IconButton(
                     onClick = onToggleLoop,
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(32.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Repeat,
@@ -732,48 +733,49 @@ private fun PlaybackControlsBar(
                             MaterialTheme.colorScheme.primary
                         else
                             MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(16.dp)
                     )
                 }
 
                 // Seek backward
                 IconButton(
                     onClick = onSeekBackward,
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(32.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Replay10,
                         contentDescription = "后退10秒",
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
 
                 // Play/Pause
-                FilledIconButton(
+                IconButton(
                     onClick = onPlayPause,
-                    modifier = Modifier.size(52.dp),
-                    shape = CircleShape,
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primary
-                    )
+                    modifier = Modifier.size(36.dp)
                 ) {
-                    Icon(
-                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isPlaying) "暂停" else "播放",
-                        modifier = Modifier.size(28.dp),
-                        tint = MaterialTheme.colorScheme.onPrimary
-                    )
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary
+                    ) {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (isPlaying) "暂停" else "播放",
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onPrimary
+                        )
+                    }
                 }
 
                 // Seek forward
                 IconButton(
                     onClick = onSeekForward,
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(32.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Forward10,
                         contentDescription = "前进10秒",
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
 
@@ -781,11 +783,12 @@ private fun PlaybackControlsBar(
                 Box {
                     TextButton(
                         onClick = { showSpeedMenu = true },
-                        modifier = Modifier.height(40.dp)
+                        modifier = Modifier.height(32.dp),
+                        contentPadding = PaddingValues(horizontal = 4.dp)
                     ) {
                         Text(
                             text = "${playbackSpeed}x",
-                            style = MaterialTheme.typography.labelMedium,
+                            style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Medium
                         )
                     }
@@ -809,10 +812,10 @@ private fun PlaybackControlsBar(
                 }
             }
 
-            // Duration
+            // Duration - smaller text
             Text(
                 text = formatTime(duration),
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
