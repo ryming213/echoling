@@ -76,13 +76,7 @@ fun PracticeScreen(
 
     val lazyListState = rememberLazyListState()
 
-    // Auto-scroll to current subtitle when it changes
-    LaunchedEffect(currentSubtitleIndex) {
-        if (currentSubtitleIndex >= 0 && subtitles.isNotEmpty()) {
-            val index = currentSubtitleIndex.coerceIn(0, subtitles.size - 1)
-            lazyListState.animateScrollToItem(index, scrollOffset = -80)
-        }
-    }
+    // Auto-scroll disabled - let user scroll manually
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -308,22 +302,23 @@ fun PracticeScreen(
                 }
 
                 // Center: Play/Pause button
-                FilledIconButton(
+                IconButton(
                     onClick = {
                         if (playbackState.isPlaying) viewModel.pause() else viewModel.play()
                     },
-                    modifier = Modifier.size(48.dp),
-                    shape = CircleShape,
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primary
-                    )
+                    modifier = Modifier.size(40.dp)
                 ) {
-                    Icon(
-                        imageVector = if (playbackState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (playbackState.isPlaying) "暂停" else "播放",
-                        modifier = Modifier.size(24.dp),
-                        tint = MaterialTheme.colorScheme.onPrimary
-                    )
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary
+                    ) {
+                        Icon(
+                            imageVector = if (playbackState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (playbackState.isPlaying) "暂停" else "播放",
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.onPrimary
+                        )
+                    }
                 }
 
                 // Right: Recording controls
@@ -333,7 +328,7 @@ fun PracticeScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Record button
-                    FilledIconButton(
+                    IconButton(
                         onClick = {
                             if (recordingState == RecordingState.RECORDING) {
                                 viewModel.stopRecording()
@@ -345,53 +340,55 @@ fun PracticeScreen(
                                 }
                             }
                         },
-                        modifier = Modifier.size(48.dp),
-                        shape = CircleShape,
-                        colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = if (recordingState == RecordingState.RECORDING)
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = if (recordingState == RecordingState.RECORDING)
                                 Color.Red
                             else
                                 MaterialTheme.colorScheme.secondaryContainer
-                        )
-                    ) {
-                        Icon(
-                            imageVector = if (recordingState == RecordingState.RECORDING)
-                                Icons.Default.Stop
-                            else
-                                Icons.Default.Mic,
-                            contentDescription = "录音",
-                            modifier = Modifier.size(24.dp),
-                            tint = if (recordingState == RecordingState.RECORDING)
-                                Color.White
-                            else
-                                MaterialTheme.colorScheme.onSecondaryContainer
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(12.dp))
-
-                    // Play recording button
-                    if (recordingPath != null && recordingState != RecordingState.RECORDING) {
-                        FilledIconButton(
-                            onClick = if (isPlayingRecording) {{ viewModel.stopPlayingRecording() }} else {{ viewModel.playRecording() }},
-                            modifier = Modifier.size(48.dp),
-                            shape = CircleShape,
-                            colors = IconButtonDefaults.filledIconButtonColors(
-                                containerColor = if (isPlayingRecording)
-                                    MaterialTheme.colorScheme.primary
-                                else
-                                    MaterialTheme.colorScheme.secondaryContainer
-                            )
                         ) {
                             Icon(
-                                imageVector = if (isPlayingRecording) Icons.Default.Stop else Icons.Default.PlayArrow,
-                                contentDescription = if (isPlayingRecording) "停止" else "播放录音",
-                                modifier = Modifier.size(24.dp),
-                                tint = if (isPlayingRecording)
+                                imageVector = if (recordingState == RecordingState.RECORDING)
+                                    Icons.Default.Stop
+                                else
+                                    Icons.Default.Mic,
+                                contentDescription = "录音",
+                                modifier = Modifier.size(18.dp),
+                                tint = if (recordingState == RecordingState.RECORDING)
                                     Color.White
                                 else
                                     MaterialTheme.colorScheme.onSecondaryContainer
                             )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    // Play recording button
+                    if (recordingPath != null && recordingState != RecordingState.RECORDING) {
+                        IconButton(
+                            onClick = if (isPlayingRecording) {{ viewModel.stopPlayingRecording() }} else {{ viewModel.playRecording() }},
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = if (isPlayingRecording)
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.secondaryContainer
+                            ) {
+                                Icon(
+                                    imageVector = if (isPlayingRecording) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                    contentDescription = if (isPlayingRecording) "停止" else "播放录音",
+                                    modifier = Modifier.size(18.dp),
+                                    tint = if (isPlayingRecording)
+                                        Color.White
+                                    else
+                                        MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            }
                         }
                     }
                 }
@@ -436,57 +433,53 @@ private fun SubtitleCard(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(cardElevation.dp, RoundedCornerShape(16.dp))
-            .clip(RoundedCornerShape(16.dp))
+            .shadow(cardElevation.dp, RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick),
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(16.dp)
+        shape = RoundedCornerShape(12.dp)
     ) {
         Row(modifier = Modifier.fillMaxWidth()) {
             // Active indicator bar
             if (isActive) {
                 Box(
                     modifier = Modifier
-                        .width(4.dp)
+                        .width(3.dp)
                         .fillMaxHeight()
                         .background(MaterialTheme.colorScheme.primary)
                 )
             }
 
             Column(
-                modifier = Modifier.padding(16.dp)
+                modifier = Modifier.padding(12.dp)
             ) {
-                // Sentence number badge
+                // Sentence number and words in same row
                 Row(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "第${listIndex}句",
-                        style = MaterialTheme.typography.labelMedium,
+                        text = "${listIndex}.",
+                        style = MaterialTheme.typography.labelSmall,
                         color = if (isActive)
                             MaterialTheme.colorScheme.primary
                         else
                             MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Words with cover effect
-                if (isAllRevealed) {
-                    // All words revealed - show as elegant chips
-                    WordsRevealedRow(
-                        words = words,
-                        onWordLongClick = onWordLongClick
-                    )
-                } else {
-                    // Show with cover effect
-                    WordsCoveredRow(
-                        words = words,
-                        revealedWords = revealedWords,
-                        onWordReveal = onWordReveal,
-                        onWordLongClick = onWordLongClick
-                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    // Words with cover effect
+                    if (isAllRevealed) {
+                        WordsRevealedRow(
+                            words = words,
+                            onWordLongClick = onWordLongClick
+                        )
+                    } else {
+                        WordsCoveredRow(
+                            words = words,
+                            revealedWords = revealedWords,
+                            onWordReveal = onWordReveal,
+                            onWordLongClick = onWordLongClick
+                        )
+                    }
                 }
             }
         }
