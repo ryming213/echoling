@@ -313,56 +313,72 @@ fun PracticeScreen(
                     }
                 }
 
-                // Right: Recording button - shows different icons based on state
-                IconButton(
-                    onClick = {
-                        when {
-                            recordingState == RecordingState.RECORDING -> {
+                // Right: Recording controls (two buttons when recording exists)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Recording button
+                    IconButton(
+                        onClick = {
+                            if (recordingState == RecordingState.RECORDING) {
                                 viewModel.stopRecording()
-                            }
-                            recordingPath != null && recordingState != RecordingState.RECORDING -> {
-                                if (isPlayingRecording) {
-                                    viewModel.stopPlayingRecording()
-                                } else {
-                                    viewModel.playRecording()
-                                }
-                            }
-                            else -> {
+                            } else {
                                 if (hasRecordPermission) {
                                     viewModel.startRecording()
                                 } else {
                                     permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                                 }
                             }
-                        }
-                    },
-                    modifier = Modifier.size(54.dp)
-                ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = when {
-                            recordingState == RecordingState.RECORDING -> Color.Red
-                            recordingPath != null && isPlayingRecording -> MaterialTheme.colorScheme.primary
-                            recordingPath != null -> MaterialTheme.colorScheme.primaryContainer
-                            else -> MaterialTheme.colorScheme.secondaryContainer
-                        }
+                        },
+                        modifier = Modifier.size(54.dp)
                     ) {
-                        Icon(
-                            imageVector = when {
-                                recordingState == RecordingState.RECORDING -> Icons.Default.Stop
-                                recordingPath != null && isPlayingRecording -> Icons.Default.Stop
-                                recordingPath != null -> Icons.Default.PlayArrow
-                                else -> Icons.Default.Mic
-                            },
-                            contentDescription = "录音",
-                            modifier = Modifier.size(26.dp),
-                            tint = when {
-                                recordingState == RecordingState.RECORDING -> Color.White
-                                recordingPath != null && isPlayingRecording -> MaterialTheme.colorScheme.onPrimary
-                                recordingPath != null -> MaterialTheme.colorScheme.onPrimaryContainer
-                                else -> MaterialTheme.colorScheme.onSecondaryContainer
+                        Surface(
+                            shape = CircleShape,
+                            color = if (recordingState == RecordingState.RECORDING)
+                                Color.Red
+                            else
+                                MaterialTheme.colorScheme.secondaryContainer
+                        ) {
+                            Icon(
+                                imageVector = if (recordingState == RecordingState.RECORDING)
+                                    Icons.Default.Stop
+                                else
+                                    Icons.Default.Mic,
+                                contentDescription = "录音",
+                                modifier = Modifier.size(26.dp),
+                                tint = if (recordingState == RecordingState.RECORDING)
+                                    Color.White
+                                else
+                                    MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+                    }
+
+                    // Play recording button (only visible when recording exists)
+                    if (recordingPath != null && recordingState != RecordingState.RECORDING) {
+                        IconButton(
+                            onClick = if (isPlayingRecording) {{ viewModel.stopPlayingRecording() }} else {{ viewModel.playRecording() }},
+                            modifier = Modifier.size(54.dp)
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = if (isPlayingRecording)
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.primaryContainer
+                            ) {
+                                Icon(
+                                    imageVector = if (isPlayingRecording) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                    contentDescription = if (isPlayingRecording) "停止" else "播放录音",
+                                    modifier = Modifier.size(26.dp),
+                                    tint = if (isPlayingRecording)
+                                        Color.White
+                                    else
+                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                )
                             }
-                        )
+                        }
                     }
                 }
             }
