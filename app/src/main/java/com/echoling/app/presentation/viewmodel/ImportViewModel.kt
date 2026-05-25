@@ -37,6 +37,7 @@ class ImportViewModel @Inject constructor(
 
     fun importCourse(
         title: String,
+        difficulty: String,
         audioUri: Uri?,
         videoUri: Uri?,
         subtitleUri: Uri?,
@@ -84,7 +85,7 @@ class ImportViewModel @Inject constructor(
                     courseId = "course_${System.currentTimeMillis()}",
                     title = title,
                     description = "Imported course: $title",
-                    difficulty = "Intermediate",
+                    difficulty = difficulty,
                     audioUri = audioFile?.absolutePath,
                     videoUri = videoFile?.absolutePath,
                     subtitleUri = subtitleFile?.absolutePath,
