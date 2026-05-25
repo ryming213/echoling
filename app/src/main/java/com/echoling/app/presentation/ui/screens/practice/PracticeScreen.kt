@@ -313,16 +313,26 @@ fun PracticeScreen(
                     }
                 }
 
-                // Right: Recording button (only one, smaller)
+                // Right: Recording button - shows different icons based on state
                 IconButton(
                     onClick = {
-                        if (recordingState == RecordingState.RECORDING) {
-                            viewModel.stopRecording()
-                        } else {
-                            if (hasRecordPermission) {
-                                viewModel.startRecording()
-                            } else {
-                                permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        when {
+                            recordingState == RecordingState.RECORDING -> {
+                                viewModel.stopRecording()
+                            }
+                            recordingPath != null && recordingState != RecordingState.RECORDING -> {
+                                if (isPlayingRecording) {
+                                    viewModel.stopPlayingRecording()
+                                } else {
+                                    viewModel.playRecording()
+                                }
+                            }
+                            else -> {
+                                if (hasRecordPermission) {
+                                    viewModel.startRecording()
+                                } else {
+                                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                }
                             }
                         }
                     },
@@ -330,22 +340,28 @@ fun PracticeScreen(
                 ) {
                     Surface(
                         shape = CircleShape,
-                        color = if (recordingState == RecordingState.RECORDING)
-                            Color.Red
-                        else
-                            MaterialTheme.colorScheme.secondaryContainer
+                        color = when {
+                            recordingState == RecordingState.RECORDING -> Color.Red
+                            recordingPath != null && isPlayingRecording -> MaterialTheme.colorScheme.primary
+                            recordingPath != null -> MaterialTheme.colorScheme.primaryContainer
+                            else -> MaterialTheme.colorScheme.secondaryContainer
+                        }
                     ) {
                         Icon(
-                            imageVector = if (recordingState == RecordingState.RECORDING)
-                                Icons.Default.Stop
-                            else
-                                Icons.Default.Mic,
+                            imageVector = when {
+                                recordingState == RecordingState.RECORDING -> Icons.Default.Stop
+                                recordingPath != null && isPlayingRecording -> Icons.Default.Stop
+                                recordingPath != null -> Icons.Default.PlayArrow
+                                else -> Icons.Default.Mic
+                            },
                             contentDescription = "录音",
                             modifier = Modifier.size(26.dp),
-                            tint = if (recordingState == RecordingState.RECORDING)
-                                Color.White
-                            else
-                                MaterialTheme.colorScheme.onSecondaryContainer
+                            tint = when {
+                                recordingState == RecordingState.RECORDING -> Color.White
+                                recordingPath != null && isPlayingRecording -> MaterialTheme.colorScheme.onPrimary
+                                recordingPath != null -> MaterialTheme.colorScheme.onPrimaryContainer
+                                else -> MaterialTheme.colorScheme.onSecondaryContainer
+                            }
                         )
                     }
                 }
