@@ -112,7 +112,10 @@ class PracticeViewModel @Inject constructor(
                 // Restore saved position after media is loaded - use delay to wait for prepare
                 if (savedProgress != null && savedProgress.currentPositionMs > 0) {
                     android.util.Log.d("PracticeViewModel", "Restoring position: ${savedProgress.currentPositionMs}ms")
-                    delay(500) // Wait for media to prepare
+                    delay(1000) // Wait for media to prepare
+                    seekTo(savedProgress.currentPositionMs)
+                    // Seek again after a short delay to ensure it takes effect
+                    delay(200)
                     seekTo(savedProgress.currentPositionMs)
                 }
             } catch (e: Exception) {
@@ -325,6 +328,8 @@ class PracticeViewModel @Inject constructor(
             audioPlayer.pause()
         }
         singleSubtitleIndex = -1
+        // Save progress when pausing
+        saveProgress()
     }
 
     fun seekTo(positionMs: Long) {
@@ -481,7 +486,7 @@ class PracticeViewModel @Inject constructor(
                     finishRate = if (duration > 0) currentPos.toFloat() / duration.toFloat() else 0f
                 )
                 learningProgressRepository.saveProgress(newProgress)
-                android.util.Log.d("PracticeViewModel", "Progress saved: pos=$currentPos, sentenceId=$currentSentenceId")
+                android.util.Log.d("PracticeViewModel", "Progress saved: courseId=$currentCourseId, pos=$currentPos, duration=$duration, sentenceId=$currentSentenceId")
             } catch (e: Exception) {
                 android.util.Log.e("PracticeViewModel", "Error saving progress: ${e.message}")
             }
