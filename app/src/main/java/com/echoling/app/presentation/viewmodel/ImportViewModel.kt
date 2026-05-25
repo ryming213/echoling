@@ -80,6 +80,10 @@ class ImportViewModel @Inject constructor(
                     subtitleFile = copyUriToInternalStorage(context, subtitleUri, subtitleFileName)
                 }
 
+                // Get duration from audio or video
+                val sourceUri = audioUri ?: videoUri
+                val duration = if (sourceUri != null) getMediaDuration(context, sourceUri) else 0L
+
                 // Create course entity
                 val course = Course(
                     courseId = "course_${System.currentTimeMillis()}",
@@ -89,7 +93,7 @@ class ImportViewModel @Inject constructor(
                     audioUri = audioFile?.absolutePath,
                     videoUri = videoFile?.absolutePath,
                     subtitleUri = subtitleFile?.absolutePath,
-                    durationMs = durationMs,
+                    durationMs = duration,
                     totalSentences = 0,
                     thumbnailUri = null,
                     createdAt = System.currentTimeMillis(),
@@ -126,6 +130,19 @@ class ImportViewModel @Inject constructor(
         } catch (e: Exception) {
             e.printStackTrace()
             null
+        }
+    }
+
+    private fun getMediaDuration(context: Context, uri: Uri): Long {
+        return try {
+            val retriever = android.media.MediaMetadataRetriever()
+            retriever.setDataSource(context, uri)
+            val durationStr = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
+            retriever.release()
+            durationStr?.toLongOrNull() ?: 0L
+        } catch (e: Exception) {
+            e.printStackTrace()
+            0L
         }
     }
 
