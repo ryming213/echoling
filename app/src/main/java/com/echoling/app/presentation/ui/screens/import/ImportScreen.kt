@@ -23,6 +23,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.echoling.app.presentation.viewmodel.ImportState
 import com.echoling.app.presentation.viewmodel.ImportViewModel
 
+private val difficultyOptions = listOf("Beginner", "Intermediate", "Advanced")
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ImportScreen(
@@ -34,6 +36,8 @@ fun ImportScreen(
     var videoUri by remember { mutableStateOf<Uri?>(null) }
     var subtitleUri by remember { mutableStateOf<Uri?>(null) }
     var courseTitle by remember { mutableStateOf("") }
+    var selectedDifficulty by remember { mutableStateOf("Intermediate") }
+    var dropdownExpanded by remember { mutableStateOf(false) }
 
     val importState by viewModel.importState.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
@@ -153,6 +157,63 @@ fun ImportScreen(
                 enabled = importState != ImportState.IMPORTING
             )
 
+            // Difficulty selector
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                ExposedDropdownMenuBox(
+                    expanded = dropdownExpanded,
+                    onExpandedChange = {
+                        if (importState != ImportState.IMPORTING) {
+                            dropdownExpanded = it
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    OutlinedTextField(
+                        value = selectedDifficulty,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Difficulty") },
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = dropdownExpanded)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(),
+                        enabled = importState != ImportState.IMPORTING,
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = dropdownExpanded,
+                        onDismissRequest = { dropdownExpanded = false }
+                    ) {
+                        difficultyOptions.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(option) },
+                                onClick = {
+                                    selectedDifficulty = option
+                                    dropdownExpanded = false
+                                },
+                                leadingIcon = if (option == selectedDifficulty) {
+                                    {
+                                        Icon(
+                                            Icons.Default.AudioFile,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                } else null
+                            )
+                        }
+                    }
+                }
+            }
+
             // Error message
             if (importState == ImportState.ERROR) {
                 Card(
@@ -185,6 +246,7 @@ fun ImportScreen(
                     if (hasMedia && courseTitle.isNotBlank()) {
                         viewModel.importCourse(
                             title = courseTitle,
+                            difficulty = selectedDifficulty,
                             audioUri = audioUri,
                             videoUri = videoUri,
                             subtitleUri = subtitleUri
