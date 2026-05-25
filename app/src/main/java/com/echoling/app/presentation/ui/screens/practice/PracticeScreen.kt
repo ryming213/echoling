@@ -255,15 +255,15 @@ fun PracticeScreen(
                 item { Spacer(modifier = Modifier.height(16.dp)) }
             }
 
-            // Bottom Controls Row
+            // Bottom Controls Row - evenly distributed
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    .padding(horizontal = 24.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Left: Toggle visibility button - circular
+                // Left: Toggle visibility button
                 IconButton(
                     onClick = {
                         allRevealed = !allRevealed
@@ -271,7 +271,7 @@ fun PracticeScreen(
                             revealedWords = emptyMap()
                         }
                     },
-                    modifier = Modifier.size(44.dp)
+                    modifier = Modifier.size(54.dp)
                 ) {
                     Surface(
                         shape = CircleShape,
@@ -283,7 +283,7 @@ fun PracticeScreen(
                         Icon(
                             imageVector = if (allRevealed) Icons.Default.VisibilityOff else Icons.Default.Visibility,
                             contentDescription = null,
-                            modifier = Modifier.size(22.dp),
+                            modifier = Modifier.size(26.dp),
                             tint = if (allRevealed)
                                 MaterialTheme.colorScheme.onSurfaceVariant
                             else
@@ -292,14 +292,12 @@ fun PracticeScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.width(4.dp))
-
-                // Center: Play/Pause button - circular
+                // Center: Play/Pause button
                 IconButton(
                     onClick = {
                         if (playbackState.isPlaying) viewModel.pause() else viewModel.play()
                     },
-                    modifier = Modifier.size(44.dp)
+                    modifier = Modifier.size(54.dp)
                 ) {
                     Surface(
                         shape = CircleShape,
@@ -308,80 +306,46 @@ fun PracticeScreen(
                         Icon(
                             imageVector = if (playbackState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                             contentDescription = if (playbackState.isPlaying) "暂停" else "播放",
-                            modifier = Modifier.size(22.dp),
+                            modifier = Modifier.size(28.dp),
                             tint = MaterialTheme.colorScheme.onPrimary
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.width(4.dp))
-
-                // Right: Recording controls
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Record button - circular
-                    IconButton(
-                        onClick = {
-                            if (recordingState == RecordingState.RECORDING) {
-                                viewModel.stopRecording()
+                // Right: Recording button (only one, smaller)
+                IconButton(
+                    onClick = {
+                        if (recordingState == RecordingState.RECORDING) {
+                            viewModel.stopRecording()
+                        } else {
+                            if (hasRecordPermission) {
+                                viewModel.startRecording()
                             } else {
-                                if (hasRecordPermission) {
-                                    viewModel.startRecording()
-                                } else {
-                                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                }
+                                permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             }
-                        },
-                        modifier = Modifier.size(44.dp)
+                        }
+                    },
+                    modifier = Modifier.size(54.dp)
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = if (recordingState == RecordingState.RECORDING)
+                            Color.Red
+                        else
+                            MaterialTheme.colorScheme.secondaryContainer
                     ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = if (recordingState == RecordingState.RECORDING)
-                                Color.Red
+                        Icon(
+                            imageVector = if (recordingState == RecordingState.RECORDING)
+                                Icons.Default.Stop
                             else
-                                MaterialTheme.colorScheme.secondaryContainer
-                        ) {
-                            Icon(
-                                imageVector = if (recordingState == RecordingState.RECORDING)
-                                    Icons.Default.Stop
-                                else
-                                    Icons.Default.Mic,
-                                contentDescription = "录音",
-                                modifier = Modifier.size(22.dp),
-                                tint = if (recordingState == RecordingState.RECORDING)
-                                    Color.White
-                                else
-                                    MaterialTheme.colorScheme.onSecondaryContainer
-                            )
-                        }
-                    }
-
-                    // Play recording button - circular
-                    if (recordingPath != null && recordingState != RecordingState.RECORDING) {
-                        IconButton(
-                            onClick = if (isPlayingRecording) {{ viewModel.stopPlayingRecording() }} else {{ viewModel.playRecording() }},
-                            modifier = Modifier.size(44.dp)
-                        ) {
-                            Surface(
-                                shape = CircleShape,
-                                color = if (isPlayingRecording)
-                                    MaterialTheme.colorScheme.primary
-                                else
-                                    MaterialTheme.colorScheme.secondaryContainer
-                            ) {
-                                Icon(
-                                    imageVector = if (isPlayingRecording) Icons.Default.Stop else Icons.Default.PlayArrow,
-                                    contentDescription = if (isPlayingRecording) "停止" else "播放录音",
-                                    modifier = Modifier.size(22.dp),
-                                    tint = if (isPlayingRecording)
-                                        Color.White
-                                    else
-                                        MaterialTheme.colorScheme.onSecondaryContainer
-                                )
-                            }
-                        }
+                                Icons.Default.Mic,
+                            contentDescription = "录音",
+                            modifier = Modifier.size(26.dp),
+                            tint = if (recordingState == RecordingState.RECORDING)
+                                Color.White
+                            else
+                                MaterialTheme.colorScheme.onSecondaryContainer
+                        )
                     }
                 }
             }
@@ -600,7 +564,7 @@ private fun WordChipItem(
     val wordStyle = TextStyle(
         fontFamily = FontFamily(Font(R.font.aptos, FontWeight.Medium)),
         fontWeight = FontWeight.Medium,
-        fontSize = 14.sp
+        fontSize = 12.sp
     )
 
     if (isRevealed) {
@@ -657,7 +621,7 @@ private fun PlaybackControlsBar(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .padding(horizontal = 8.dp, vertical = 2.dp)
     ) {
         // Progress bar - compact height
         var sliderPosition by remember(currentPosition) { mutableFloatStateOf(currentPosition.toFloat()) }
