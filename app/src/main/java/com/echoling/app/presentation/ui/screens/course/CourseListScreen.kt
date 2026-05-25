@@ -258,7 +258,10 @@ private fun CourseCard(
                     Text(
                         text = formatDuration(course.durationMs),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(min = 48.dp)
                     )
                 }
             }
