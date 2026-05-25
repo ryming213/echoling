@@ -597,7 +597,7 @@ private fun WordChipItem(
     val wordStyle = TextStyle(
         fontFamily = FontFamily(Font(R.font.aptos, FontWeight.Medium)),
         fontWeight = FontWeight.Medium,
-        fontSize = 12.sp
+        fontSize = 14.sp
     )
 
     if (isRevealed) {
