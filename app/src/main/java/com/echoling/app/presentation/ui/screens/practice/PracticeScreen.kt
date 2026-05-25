@@ -81,7 +81,7 @@ fun PracticeScreen(
         if (currentSubtitleIndex >= 0 && subtitles.isNotEmpty() && !lazyListState.isScrollInProgress) {
             val index = currentSubtitleIndex.coerceIn(0, subtitles.size - 1)
             // Position at upper-middle of screen (offset -100) so current subtitle stays visible
-            lazyListState.animateScrollToItem(index, scrollOffset = -100)
+            lazyListState.animateScrollToItem(index, scrollOffset = -160)
         }
     }
 
