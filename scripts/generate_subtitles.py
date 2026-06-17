@@ -27,7 +27,7 @@ NO_SUB_SUFFIX = "_no_sub"
 GAP_S = 0.5
 MAX_CHARS = 84
 MAX_DUR_S = 7.0
-FFMPEG_BIN = "/c/ffmpeg/bin/ffmpeg"
+FFMPEG_BIN = r"C:\ffmpeg\bin\ffmpeg.exe"
 TEMP_SUBDIR = "_tmp_audio"
 
 
@@ -76,6 +76,36 @@ def discover_videos(dir: Path) -> List[Path]:
             continue
         todo.append(video)
     return todo
+
+
+def extract_audio(video_path: Path, temp_dir: Path) -> Path:
+    """Extract 16kHz mono PCM WAV from the first audio track of video.
+
+    Returns the path to the temporary wav file. Caller is responsible
+    for deleting it after use.
+    """
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    wav_path = temp_dir / f"{video_path.stem}.wav"
+    cmd = [
+        FFMPEG_BIN,
+        "-y",                 # overwrite without prompt
+        "-i", str(video_path),
+        "-vn",                # no video
+        "-ac", "1",           # mono
+        "-ar", "16000",       # 16kHz (Whisper expected rate)
+        "-f", "wav",
+        str(wav_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        stderr_tail = (result.stderr or "")[-500:]
+        raise RuntimeError(
+            f"ffmpeg failed for {video_path.name} (rc={result.returncode}): "
+            f"{stderr_tail}"
+        )
+    if not wav_path.exists() or wav_path.stat().st_size == 0:
+        raise RuntimeError(f"ffmpeg produced empty wav for {video_path.name}")
+    return wav_path
 
 
 def parse_args() -> argparse.Namespace:
