@@ -257,12 +257,13 @@ def run_batch(target_dir: Path) -> int:
     for i, video in enumerate(videos, 1):
         t0 = time.time()
         srt = None
-        last_err = None
+        # Sentinel exception; only used if both attempts fail (srt stays None).
+        last_err: Exception = RuntimeError("transcribe failed")
         # Per spec §9: retry once on Whisper failure
         for attempt in (1, 2):
             try:
                 srt = transcribe_to_srt(video, model, temp_dir)
-                last_err = None
+                last_err = RuntimeError("unreachable")  # placeholder, not raised
                 break
             except Exception as e:
                 last_err = e
@@ -270,7 +271,7 @@ def run_batch(target_dir: Path) -> int:
                     print(f"[{i}/{len(videos)}] {video.name}: attempt 1 failed ({e}), retrying...", file=sys.stderr)
         try:
             if srt is None:
-                raise last_err  # type: ignore[misc]
+                raise last_err
             output = output_path_for(video)
             output.write_text(srt, encoding="utf-8")
             elapsed = time.time() - t0
