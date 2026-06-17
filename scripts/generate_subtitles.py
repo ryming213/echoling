@@ -221,6 +221,100 @@ def transcribe_to_srt(
                 pass  # best-effort cleanup
 
 
+def run_smoke(video_path: Path, model) -> int:
+    """Transcribe one file, print SRT to stdout, return 0."""
+    print(f"[smoke] transcribing: {video_path.name}", file=sys.stderr)
+    temp_dir = video_path.parent / TEMP_SUBDIR
+    try:
+        srt = transcribe_to_srt(video_path, model, temp_dir)
+        sys.stdout.write(srt)
+        return 0
+    except Exception as e:
+        print(f"[smoke] FAILED: {e}", file=sys.stderr)
+        return 1
+    finally:
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def run_batch(target_dir: Path) -> int:
+    """Process all pending videos, print summary, return 0 on full success."""
+    print(f"Scanning: {target_dir}")
+    videos = discover_videos(target_dir)
+    if not videos:
+        print("Nothing to do (all videos already have .srt).")
+        return 0
+    print(f"Found {len(videos)} videos to process\n")
+
+    print(f"Loading Whisper model '{MODEL_NAME}' (first run may download ~1.5GB)...")
+    t_load = time.time()
+    model = whisper.load_model(MODEL_NAME)
+    print(f"Model loaded in {time.time() - t_load:.1f}s\n")
+
+    temp_dir = target_dir / TEMP_SUBDIR
+    failed: list = []
+    start = time.time()
+    for i, video in enumerate(videos, 1):
+        t0 = time.time()
+        srt = None
+        last_err = None
+        # Per spec §9: retry once on Whisper failure
+        for attempt in (1, 2):
+            try:
+                srt = transcribe_to_srt(video, model, temp_dir)
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                if attempt == 1:
+                    print(f"[{i}/{len(videos)}] {video.name}: attempt 1 failed ({e}), retrying...", file=sys.stderr)
+        try:
+            if srt is None:
+                raise last_err  # type: ignore[misc]
+            output = output_path_for(video)
+            output.write_text(srt, encoding="utf-8")
+            elapsed = time.time() - t0
+            entry_count = srt.count("-->")
+            print(
+                f"[{i}/{len(videos)}] {video.name}\n"
+                f"           -> {output.name} "
+                f"({entry_count} entries, {elapsed:.1f}s)"
+            )
+        except Exception as e:
+            elapsed = time.time() - t0
+            print(f"[{i}/{len(videos)}] FAILED {video.name} ({elapsed:.1f}s): {e}")
+            failed.append((video, str(e)))
+
+    # Cleanup temp dir
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    total = time.time() - start
+    print(f"\n=== 总结 ===")
+    print(f"成功: {len(videos) - len(failed)} / {len(videos)}")
+    print(f"失败: {len(failed)}")
+    print(f"总耗时: {total / 60:.1f}m")
+    print(f"输出目录: {target_dir}")
+    if failed:
+        print("\n失败文件:")
+        for video, err in failed:
+            print(f"  - {video.name}: {err}")
+    return 0 if not failed else 1
+
+
+def main() -> int:
+    args = parse_args()
+    if args.smoke:
+        smoke_path = Path(args.smoke)
+        if not smoke_path.is_file():
+            print(f"Smoke file not found: {smoke_path}", file=sys.stderr)
+            return 1
+        # Lazy model load for smoke mode
+        model = whisper.load_model(MODEL_NAME)
+        return run_smoke(smoke_path, model)
+    return run_batch(Path(args.dir))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate SRT subtitles from mp4 videos using Whisper."
@@ -240,5 +334,4 @@ def parse_args() -> argparse.Namespace:
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    print(f"dir={args.dir}  smoke={args.smoke}")
+    sys.exit(main())
