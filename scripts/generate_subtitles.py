@@ -135,6 +135,63 @@ def format_srt(entries: List[SrtEntry]) -> str:
     return "\n\n".join(blocks) + "\n"
 
 
+def merge_close_segments(
+    segments: list,
+    gap_s: float = GAP_S,
+    max_chars: int = MAX_CHARS,
+    max_dur_s: float = MAX_DUR_S,
+) -> List[SrtEntry]:
+    """Merge Whisper segments into SrtEntry list, combining close sentences.
+
+    Algorithm:
+      1. Group words by Whisper's natural segment boundaries
+      2. Merge adjacent groups IF all of:
+         - gap between groups < gap_s seconds
+         - combined character count <= max_chars
+         - combined duration <= max_dur_s seconds
+      3. Form SrtEntry using word-level timestamps (first word's start,
+         last word's end) -- this is what makes the timing precise.
+    """
+    # Step 1: group words by segment
+    groups = []
+    for seg in segments:
+        words = [
+            w for w in (seg.words or [])
+            if w.start is not None and w.end is not None
+        ]
+        if words:
+            groups.append(words)
+
+    # Step 2: merge adjacent groups
+    merged: List[list] = []
+    for group in groups:
+        if not merged:
+            merged.append(group)
+            continue
+        prev = merged[-1]
+        gap = group[0].start - prev[-1].end
+        text_len = sum(len(w.word) for w in prev) + sum(len(w.word) for w in group)
+        dur = group[-1].end - prev[0].start
+        if gap < gap_s and text_len <= max_chars and dur <= max_dur_s:
+            merged[-1] = prev + group
+        else:
+            merged.append(group)
+
+    # Step 3: form SrtEntry
+    entries = []
+    for i, group in enumerate(merged):
+        text = " ".join(w.word.strip() for w in group)
+        entries.append(
+            SrtEntry(
+                index=i + 1,
+                start_ms=int(round(group[0].start * 1000)),
+                end_ms=int(round(group[-1].end * 1000)),
+                text=text,
+            )
+        )
+    return entries
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate SRT subtitles from mp4 videos using Whisper."
