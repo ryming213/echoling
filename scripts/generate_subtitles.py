@@ -192,6 +192,35 @@ def merge_close_segments(
     return entries
 
 
+def transcribe_to_srt(
+    video_path: Path,
+    model,
+    temp_dir: Path,
+) -> str:
+    """Extract audio, transcribe with Whisper, merge, format as SRT.
+
+    Cleans up the temp wav file even on failure.
+    Returns the SRT text content (may be empty string if no dialogue).
+    """
+    wav_path = None
+    try:
+        wav_path = extract_audio(video_path, temp_dir)
+        result = model.transcribe(
+            str(wav_path),
+            word_timestamps=True,
+            language="en",
+            verbose=False,
+        )
+        entries = merge_close_segments(result.get("segments", []))
+        return format_srt(entries)
+    finally:
+        if wav_path is not None and wav_path.exists():
+            try:
+                wav_path.unlink()
+            except OSError:
+                pass  # best-effort cleanup
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate SRT subtitles from mp4 videos using Whisper."
