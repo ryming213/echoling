@@ -39,6 +39,45 @@ class SrtEntry:
     text: str
 
 
+def output_path_for(video_path: Path) -> Path:
+    """Convert '<stem>_no_sub.mp4' -> '<stem>.srt' next to the video.
+
+    Example:
+        'D:/.../S302 The Rainbow_no_sub.mp4'
+            -> 'D:/.../S302 The Rainbow.srt'
+    """
+    stem = video_path.stem
+    if not stem.endswith(NO_SUB_SUFFIX):
+        raise ValueError(
+            f"Not a _no_sub file (missing suffix): {video_path.name}"
+        )
+    new_stem = stem[: -len(NO_SUB_SUFFIX)]
+    return video_path.with_name(new_stem + ".srt")
+
+
+def discover_videos(dir: Path) -> List[Path]:
+    """Return sorted list of videos that need subtitles.
+
+    Filters:
+      - Only *.mp4 files
+      - Stem must end with '_no_sub'
+      - Skip if the corresponding .srt already exists
+    """
+    if not dir.is_dir():
+        raise FileNotFoundError(f"Directory not found: {dir}")
+    candidates = sorted(
+        p for p in dir.glob("*.mp4") if p.stem.endswith(NO_SUB_SUFFIX)
+    )
+    todo = []
+    for video in candidates:
+        srt = output_path_for(video)
+        if srt.exists():
+            print(f"  [skip] srt exists: {srt.name}")
+            continue
+        todo.append(video)
+    return todo
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate SRT subtitles from mp4 videos using Whisper."
