@@ -1,0 +1,114 @@
+Scanning: D:\English\Peppa Pig第三季
+Found 51 videos to process
+
+Loading Whisper model 'medium' (first run may download ~1.5GB)...
+Model loaded in 5.1s
+
+[1/51] S302 The Rainbow_no_sub.mp4
+           -> S302 The Rainbow.srt (73 entries, 307.7s)
+[2/51] S303 Pedro's Cough_no_sub.mp4
+           -> S303 Pedro's Cough.srt (65 entries, 369.2s)
+[3/51] S304 The Library_no_sub.mp4
+           -> S304 The Library.srt (54 entries, 303.8s)
+[4/51] S305 The Camper Van_no_sub.mp4
+           -> S305 The Camper Van.srt (59 entries, 274.2s)
+[5/51] S306 Camping Holiday_no_sub.mp4
+           -> S306 Camping Holiday.srt (62 entries, 270.7s)
+[6/51] S307 Compost_no_sub.mp4
+           -> S307 Compost.srt (59 entries, 274.0s)
+[7/51] S308 Richard Rabbit Comes to Play_no_sub.mp4
+           -> S308 Richard Rabbit Comes to Play.srt (64 entries, 266.4s)
+[8/51] S309 Fun Run_no_sub.mp4
+           -> S309 Fun Run.srt (66 entries, 280.8s)
+[9/51] S310 Washing_no_sub.mp4
+           -> S310 Washing.srt (60 entries, 262.6s)
+[10/51] S311 Polly's Boat Trip_no_sub.mp4
+           -> S311 Polly's Boat Trip.srt (56 entries, 284.1s)
+[11/51] S312 Delphine Donkey_no_sub.mp4
+           -> S312 Delphine Donkey.srt (56 entries, 525.2s)
+[12/51] S313 The Fire Engine_no_sub.mp4
+           -> S313 The Fire Engine.srt (61 entries, 288.2s)
+[13/51] S314 Princess Peppa_no_sub.mp4
+           -> S314 Princess Peppa.srt (60 entries, 290.8s)
+[14/51] S315 Teddy Playgroup_no_sub.mp4
+           -> S315 Teddy Playgroup.srt (55 entries, 280.2s)
+[15/51] S316 Danny's Pirate Party_no_sub.mp4
+           -> S316 Danny's Pirate Party.srt (63 entries, 301.8s)
+[16/51] S317 Mr Potato Comes to Town_no_sub.mp4
+           -> S317 Mr Potato Comes to Town.srt (60 entries, 288.4s)
+[17/51] S318 The Train Ride_no_sub.mp4
+           -> S318 The Train Ride.srt (61 entries, 293.0s)
+[18/51] S319 Granny Pig's Chickens_no_sub.mp4
+           -> S319 Granny Pig's Chickens.srt (47 entries, 273.3s)
+[19/51] S320 Talent Day_no_sub.mp4
+           -> S320 Talent Day.srt (61 entries, 260.7s)
+[20/51] S321 A Trip To the Moon_no_sub.mp4
+           -> S321 A Trip To the Moon.srt (29 entries, 318.5s)
+[21/51] S322 Grandpa at the Playground_no_sub.mp4
+           -> S322 Grandpa at the Playground.srt (60 entries, 569.9s)
+[22/51] S323 Goldie the Fish_no_sub.mp4
+           -> S323 Goldie the Fish.srt (53 entries, 787.5s)
+[23/51] S324 Funfair_no_sub.mp4
+           -> S324 Funfair.srt (58 entries, 601.4s)
+[24/51] S325 Numbers_no_sub.mp4
+           -> S325 Numbers.srt (53 entries, 565.6s)
+[25/51] S326 Digging up the Road_no_sub.mp4
+           -> S326 Digging up the Road.srt (67 entries, 694.0s)
+[26/51] S327 Freddy Fox_no_sub.mp4
+           -> S327 Freddy Fox.srt (61 entries, 523.8s)
+[27/51] S328 Whistling_no_sub.mp4
+           -> S328 Whistling.srt (52 entries, 536.5s)
+[28/51] S329 Doctor Hamster's Tortoise_no_sub.mp4
+           -> S329 Doctor Hamster's Tortoise.srt (31 entries, 519.1s)
+[29/51] S330 Sun, Sea and Snow_no_sub.mp4
+           -> S330 Sun, Sea and Snow.srt (65 entries, 630.6s)
+[30/51] S331 Grandpa Pig's Computer_no_sub.mp4
+           -> S331 Grandpa Pig's Computer.srt (58 entries, 536.0s)
+[31/51] S332 Hospital_no_sub.mp4
+           -> S332 Hospital.srt (57 entries, 613.3s)
+[32/51] S333 Spring_no_sub.mp4
+           -> S333 Spring.srt (61 entries, 606.9s)
+[33/51] S334 Miss Rabbit's Helicopter_no_sub.mp4
+           -> S334 Miss Rabbit's Helicopter.srt (54 entries, 544.1s)
+[34/51] S335 Baby Alexander_no_sub.mp4
+           -> S335 Baby Alexander.srt (61 entries, 572.6s)
+[35/51] S336 Grampy Rabbit's Lighthouse_no_sub.mp4
+           -> S336 Grampy Rabbit's Lighthouse.srt (62 entries, 742.9s)
+[36/51] S337 The Secret Club_no_sub.mp4
+           -> S337 The Secret Club.srt (58 entries, 624.2s)
+[37/51] S338 Miss Rabbit's Day Off_no_sub.mp4
+           -> S338 Miss Rabbit's Day Off.srt (64 entries, 633.5s)
+[38/51] S339 Grampy Rabbit's Boatyard_no_sub.mp4
+           -> S339 Grampy Rabbit's Boatyard.srt (57 entries, 564.9s)
+[39/51] S340 Shake, Rattle and Bang_no_sub.mp4
+           -> S340 Shake, Rattle and Bang.srt (49 entries, 282.3s)
+[40/51] S341 Champion Daddy Pig_no_sub.mp4
+           -> S341 Champion Daddy Pig.srt (62 entries, 323.0s)
+[41/51] S342 Chatterbox_no_sub.mp4
+           -> S342 Chatterbox.srt (63 entries, 341.9s)
+[42/51] S343 Mr Fox’s Van_no_sub.mp4
+           -> S343 Mr Fox’s Van.srt (50 entries, 332.2s)
+[43/51] S344 Chloe's Big Friends_no_sub.mp4
+           -> S344 Chloe's Big Friends.srt (62 entries, 295.1s)
+[44/51] S345 Gym Class_no_sub.mp4
+           -> S345 Gym Class.srt (55 entries, 278.6s)
+[45/51] S346 The Blackberry Bush_no_sub.mp4
+           -> S346 The Blackberry Bush.srt (60 entries, 347.1s)
+[46/51] S347 Pottery_no_sub.mp4
+           -> S347 Pottery.srt (54 entries, 261.5s)
+[47/51] S348 Paper Aeroplanes_no_sub.mp4
+           -> S348 Paper Aeroplanes.srt (60 entries, 310.9s)
+[48/51] S349 Edmond Elephant's Birthday_no_sub.mp4
+           -> S349 Edmond Elephant's Birthday.srt (57 entries, 268.5s)
+[49/51] S350 The Biggest Muddy Puddle In the World_no_sub.mp4
+           -> S350 The Biggest Muddy Puddle In the World.srt (57 entries, 264.7s)
+[50/51] S351 Santa's Grotto_no_sub.mp4
+           -> S351 Santa's Grotto.srt (58 entries, 472.2s)
+[51/51] S352 Santa's Visit_no_sub.mp4
+           -> S352 Santa's Visit.srt (54 entries, 512.3s)
+
+=== 总结 ===
+成功: 51 / 51
+失败: 0
+总耗时: 352.8m
+输出目录: D:\English\Peppa Pig第三季

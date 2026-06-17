@@ -186,9 +186,21 @@ Examples:
 
 ## 11. Performance Estimates
 
+**Theoretical:**
 - Per episode (5 min video, medium model, CPU): ~1-2 minutes
 - 51 episodes total: ~1.5-2 hours
 - Model download (first run only): medium model ~1.5GB
+
+**Actual (measured 2026-06-17, 51 Peppa Pig S3 videos on Windows 11, CPU-only):**
+- Per episode: ~7 minutes on average (range 4.3 min to 13.1 min)
+- 51 episodes total: **5h 53m** (352.8 min)
+- First run with model download: ~15-20 min
+- Variance was high — some videos took 3x longer than others, likely due to
+  audio complexity (music, sound effects) increasing Whisper's processing load
+
+**Implication:** The original estimate was off by ~2-3x. If you need to
+re-run on a different machine or model, budget closer to 6 hours for 51
+videos on CPU. A GPU would cut this to ~1-1.5 hours.
 
 ## 12. Trade-offs Accepted
 
