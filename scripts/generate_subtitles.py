@@ -108,6 +108,33 @@ def extract_audio(video_path: Path, temp_dir: Path) -> Path:
     return wav_path
 
 
+def format_timestamp(ms: int) -> str:
+    """Format milliseconds as SRT timestamp 'HH:MM:SS,mmm'."""
+    if ms < 0:
+        ms = 0
+    hours = ms // 3_600_000
+    minutes = (ms // 60_000) % 60
+    seconds = (ms // 1_000) % 60
+    millis = ms % 1_000
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
+
+
+def format_srt(entries: List[SrtEntry]) -> str:
+    """Format SrtEntry list as standard SRT text. Entries separated by
+    a single blank line, no trailing blank line."""
+    if not entries:
+        return ""
+    blocks = []
+    for entry in entries:
+        blocks.append(
+            f"{entry.index}\n"
+            f"{format_timestamp(entry.start_ms)} --> "
+            f"{format_timestamp(entry.end_ms)}\n"
+            f"{entry.text}"
+        )
+    return "\n\n".join(blocks) + "\n"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate SRT subtitles from mp4 videos using Whisper."
@@ -127,7 +154,5 @@ def parse_args() -> argparse.Namespace:
 
 
 if __name__ == "__main__":
-    # Other tasks add functions and the real main(); for now this just
-    # exercises the parser.
     args = parse_args()
     print(f"dir={args.dir}  smoke={args.smoke}")
