@@ -15,7 +15,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import List, NamedTuple
 
 import whisper
 from whisper.utils import get_writer  # noqa: F401  (kept for future use)
@@ -37,6 +37,32 @@ class SrtEntry:
     start_ms: int
     end_ms: int
     text: str
+
+
+class _Word(NamedTuple):
+    """Normalized internal word representation. Tolerates dict or
+    attribute input from different openai-whisper versions."""
+    start: float
+    end: float
+    text: str
+
+
+def _coerce_word(w) -> _Word:
+    """Accept a dict (current openai-whisper) or object (older versions,
+    mocks) and return a _Word tuple."""
+    if isinstance(w, dict):
+        return _Word(w["start"], w["end"], w.get("word", ""))
+    return _Word(w.start, w.end, w.word)
+
+
+def _segment_words(seg) -> List[_Word]:
+    """Extract valid (non-None timestamps) words from a Whisper segment,
+    tolerating dict or object input."""
+    raw = seg.get("words", []) if isinstance(seg, dict) else (seg.words or [])
+    return [
+        w for w in (_coerce_word(x) for x in raw)
+        if w.start is not None and w.end is not None
+    ]
 
 
 def output_path_for(video_path: Path) -> Path:
@@ -151,26 +177,26 @@ def merge_close_segments(
          - combined duration <= max_dur_s seconds
       3. Form SrtEntry using word-level timestamps (first word's start,
          last word's end) -- this is what makes the timing precise.
+
+    Accepts both dict-style (current openai-whisper) and attribute-style
+    (older versions, test mocks) input via _coerce_word/_segment_words.
     """
     # Step 1: group words by segment
-    groups = []
+    groups: List[List[_Word]] = []
     for seg in segments:
-        words = [
-            w for w in (seg.words or [])
-            if w.start is not None and w.end is not None
-        ]
+        words = _segment_words(seg)
         if words:
             groups.append(words)
 
     # Step 2: merge adjacent groups
-    merged: List[list] = []
+    merged: List[List[_Word]] = []
     for group in groups:
         if not merged:
             merged.append(group)
             continue
         prev = merged[-1]
         gap = group[0].start - prev[-1].end
-        text_len = sum(len(w.word) for w in prev) + sum(len(w.word) for w in group)
+        text_len = sum(len(w.text) for w in prev) + sum(len(w.text) for w in group)
         dur = group[-1].end - prev[0].start
         if gap < gap_s and text_len <= max_chars and dur <= max_dur_s:
             merged[-1] = prev + group
@@ -180,7 +206,7 @@ def merge_close_segments(
     # Step 3: form SrtEntry
     entries = []
     for i, group in enumerate(merged):
-        text = " ".join(w.word.strip() for w in group)
+        text = " ".join(w.text.strip() for w in group)
         entries.append(
             SrtEntry(
                 index=i + 1,
