@@ -31,7 +31,7 @@ NO_SUB_SUFFIX = "_no_sub"
 GAP_S = 0.5
 MAX_CHARS = 84
 MAX_DUR_S = 7.0
-END_PAD_MS = 250                # trailing buffer for last word's acoustic tail
+END_PAD_MS = 400                # trailing buffer for last word's acoustic tail
 FFMPEG_BIN = r"C:\ffmpeg\bin\ffmpeg.exe"
 TEMP_SUBDIR = "_tmp_audio"
 
