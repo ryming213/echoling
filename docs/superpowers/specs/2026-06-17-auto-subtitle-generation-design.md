@@ -109,6 +109,29 @@ I'm fine, thank you.
 - Index: 1-based, sequential
 - Blank line between entries
 
+### 6.5 End-time padding
+Constant `END_PAD_MS = 250` (milliseconds).
+
+After `merge_close_segments` produces SrtEntry objects, every entry's
+`end_ms` is incremented by `END_PAD_MS` before formatting. Start times
+are left unchanged.
+
+**Why:** Whisper's word-level timestamps mark the end of the acoustic
+energy for the last word. For sibilants (`s`, `sh`, `ch`), plosives
+(`p`, `t`, `k`), and voiced consonants (`n`, `m`, `l`, `r`), this can
+end ~100-200ms before a human listener perceives the word as complete.
+Without padding, "play single sentence" in 精听 mode cuts off the
+trailing tail of the last word.
+
+**Tuning:** 250ms is a sensible default for clear children's cartoon
+audio. If users report words still trailing off, increase to 400-500ms.
+If subtitles visibly overlap into the next entry's start, reduce.
+
+**In-place re-pad:** `python scripts/generate_subtitles.py --pad-ends 250`
+adds the specified millisecond pad to every entry's end time across all
+SRTs in `--dir`. Takes seconds (no re-transcription). Useful for tuning
+the value after running a batch.
+
 ## 7. Data Structures
 
 ```python
