@@ -2,13 +2,17 @@
 """Generate word-level-accurate SRT subtitles from video files.
 
 Pipeline: ffmpeg (audio extract) -> openai-whisper (transcribe with word
-timestamps) -> gap-based merge (combine close sentences) -> SRT format.
+timestamps) -> gap-based merge (combine close sentences) -> end-time pad
+(extend last word's trailing acoustic tail) -> SRT format.
 
 Usage:
     python scripts/generate_subtitles.py                    # full batch
     python scripts/generate_subtitles.py --smoke <file>     # one file, stdout
+    python scripts/generate_subtitles.py --pad-ends 250     # in-place adjust
+                                                            # all SRTs in --dir
 """
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -27,6 +31,7 @@ NO_SUB_SUFFIX = "_no_sub"
 GAP_S = 0.5
 MAX_CHARS = 84
 MAX_DUR_S = 7.0
+END_PAD_MS = 250                # trailing buffer for last word's acoustic tail
 FFMPEG_BIN = r"C:\ffmpeg\bin\ffmpeg.exe"
 TEMP_SUBDIR = "_tmp_audio"
 
@@ -161,6 +166,81 @@ def format_srt(entries: List[SrtEntry]) -> str:
     return "\n\n".join(blocks) + "\n"
 
 
+def add_ms_to_timestamp(ts: str, pad_ms: int) -> str:
+    """Add pad_ms to an SRT timestamp 'HH:MM:SS,mmm'. Clamps to >= 0.
+
+    Hours can roll over 24 (some SRT parsers accept this for very long files).
+    """
+    h, m, s_ms = ts.split(":")
+    s, ms = s_ms.split(",")
+    total = int(h) * 3_600_000 + int(m) * 60_000 + int(s) * 1_000 + int(ms) + pad_ms
+    if total < 0:
+        total = 0
+    new_h = total // 3_600_000
+    new_m = (total // 60_000) % 60
+    new_s = (total // 1_000) % 60
+    new_ms = total % 1_000
+    return f"{new_h:02d}:{new_m:02d}:{new_s:02d},{new_ms:03d}"
+
+
+def pad_srt_ends(srt_path: Path, pad_ms: int) -> int:
+    """Add pad_ms to every entry's end time in-place. Returns the number
+    of entries padded.
+
+    Does NOT re-transcribe — just adjusts timestamps in the existing SRT.
+    Idempotent only if you remember the previous pad value (running twice
+    doubles the effect).
+    """
+    text = srt_path.read_text(encoding="utf-8")
+    blocks = re.split(r"\n\n+", text.strip())
+    if not blocks or blocks == [""]:
+        return 0
+    time_re = re.compile(r"^(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[,.](\d{3})$")
+    padded_blocks = []
+    count = 0
+    for block in blocks:
+        lines = block.split("\n")
+        if len(lines) < 3:
+            padded_blocks.append(block)
+            continue
+        m = time_re.match(lines[1])
+        if not m:
+            padded_blocks.append(block)
+            continue
+        start = f"{m.group(1)}:{m.group(2)}:{m.group(3)},{m.group(4)}"
+        new_end = add_ms_to_timestamp(
+            f"{m.group(5)}:{m.group(6)}:{m.group(7)},{m.group(8)}",
+            pad_ms,
+        )
+        new_time = f"{start} --> {new_end}"
+        padded_blocks.append("\n".join([lines[0], new_time] + lines[2:]))
+        count += 1
+    srt_path.write_text("\n\n".join(padded_blocks) + "\n", encoding="utf-8")
+    return count
+
+
+def run_pad_ends(target_dir: Path, pad_ms: int) -> int:
+    """In-place adjust: add pad_ms to every entry's end time in every
+    .srt file under target_dir. Returns 0 on success, 1 on missing dir."""
+    if not target_dir.is_dir():
+        print(f"Directory not found: {target_dir}", file=sys.stderr)
+        return 1
+    srts = sorted(target_dir.glob("*.srt"))
+    if not srts:
+        print("No .srt files found.")
+        return 0
+    print(f"Patching {len(srts)} SRT files with end pad = {pad_ms}ms\n")
+    total_entries = 0
+    for srt in srts:
+        n = pad_srt_ends(srt, pad_ms)
+        total_entries += n
+        print(f"  {srt.name}: {n} entries")
+    print(f"\n=== 总结 ===")
+    print(f"已处理: {len(srts)} 个 SRT 文件")
+    print(f"已调整: {total_entries} 个字幕条目 (end +{pad_ms}ms)")
+    return 0
+
+
 def merge_close_segments(
     segments: list,
     gap_s: float = GAP_S,
@@ -222,11 +302,16 @@ def transcribe_to_srt(
     video_path: Path,
     model,
     temp_dir: Path,
+    end_pad_ms: int = END_PAD_MS,
 ) -> str:
     """Extract audio, transcribe with Whisper, merge, format as SRT.
 
     Cleans up the temp wav file even on failure.
     Returns the SRT text content (may be empty string if no dialogue).
+
+    Each entry's end time is padded by end_pad_ms to cover the trailing
+    acoustic tail of the last word (sibilants, plosives). 250ms is a
+    sensible default for clear speech.
     """
     wav_path = None
     try:
@@ -238,6 +323,9 @@ def transcribe_to_srt(
             verbose=False,
         )
         entries = merge_close_segments(result.get("segments", []))
+        if end_pad_ms:
+            for entry in entries:
+                entry.end_ms += end_pad_ms
         return format_srt(entries)
     finally:
         if wav_path is not None and wav_path.exists():
@@ -339,6 +427,8 @@ def main() -> int:
         # Lazy model load for smoke mode
         model = whisper.load_model(MODEL_NAME)
         return run_smoke(smoke_path, model)
+    if args.pad_ends is not None:
+        return run_pad_ends(Path(args.dir), args.pad_ends)
     return run_batch(Path(args.dir))
 
 
@@ -356,6 +446,16 @@ def parse_args() -> argparse.Namespace:
         metavar="FILE",
         default=None,
         help="Smoke test mode: transcribe one file, print SRT to stdout, don't write.",
+    )
+    parser.add_argument(
+        "--pad-ends",
+        metavar="MS",
+        type=int,
+        default=None,
+        help=(
+            "In-place adjust existing .srt files in --dir: add MS to every "
+            "entry's end time. Does NOT re-transcribe. Default: not applied."
+        ),
     )
     return parser.parse_args()
 
