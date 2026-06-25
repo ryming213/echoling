@@ -23,6 +23,12 @@ data class RecordingResult(
     val durationMs: Long
 )
 
+sealed class RecordingException(message: String) : Exception(message) {
+    class PrepareFailed(message: String) : RecordingException(message)
+    class StartFailed(message: String) : RecordingException(message)
+    class OutputDirectoryFailed : RecordingException("Failed to create output directory")
+}
+
 @Singleton
 class VoiceRecorder @Inject constructor(
     @ApplicationContext private val context: Context
@@ -37,10 +43,10 @@ class VoiceRecorder @Inject constructor(
     private val _amplitude = MutableStateFlow(0)
     val amplitude: StateFlow<Int> = _amplitude.asStateFlow()
 
-    fun startRecording(): String? {
+    fun startRecording(): String {
         val outputDir = File(context.cacheDir, "recordings")
-        if (!outputDir.exists()) {
-            outputDir.mkdirs()
+        if (!outputDir.exists() && !outputDir.mkdirs()) {
+            throw RecordingException.OutputDirectoryFailed()
         }
 
         val outputFile = File(outputDir, "recording_${System.currentTimeMillis()}.m4a")
@@ -65,14 +71,13 @@ class VoiceRecorder @Inject constructor(
                 recordingStartTime = System.currentTimeMillis()
                 _recordingState.value = RecordingState.RECORDING
             } catch (e: Exception) {
-                e.printStackTrace()
                 release()
                 mediaRecorder = null
-                return null
+                throw RecordingException.StartFailed(e.message ?: "Unknown error during recording start")
             }
         }
 
-        return currentFilePath
+        return currentFilePath ?: error("File path not set")
     }
 
     fun pauseRecording() {

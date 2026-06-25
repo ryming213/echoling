@@ -6,7 +6,7 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.echoling.app.domain.model.Course
-import com.echoling.app.domain.repository.CourseRepository
+import com.echoling.app.domain.usecase.ImportCourseUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,7 +26,7 @@ enum class ImportState {
 @HiltViewModel
 class ImportViewModel @Inject constructor(
     private val application: Application,
-    private val courseRepository: CourseRepository
+    private val importCourseUseCase: ImportCourseUseCase
 ) : AndroidViewModel(application) {
 
     private val _importState = MutableStateFlow(ImportState.IDLE)
@@ -36,6 +36,7 @@ class ImportViewModel @Inject constructor(
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
     fun importCourse(
+        courseName: String,
         title: String,
         difficulty: String,
         audioUri: Uri?,
@@ -55,6 +56,12 @@ class ImportViewModel @Inject constructor(
                     _importState.value = ImportState.ERROR
                     return@launch
                 }
+
+                // Resolve the parent-group name. A blank entry falls back
+                // to the lesson title so we never persist a row with both
+                // fields empty — that matches the "old data uses title"
+                // invariant the rest of the app relies on.
+                val resolvedCourseName = courseName.trim().ifBlank { title.trim() }
 
                 // Copy audio file to app's internal storage
                 var audioFile: File? = null
@@ -87,6 +94,7 @@ class ImportViewModel @Inject constructor(
                 // Create course entity
                 val course = Course(
                     courseId = "course_${System.currentTimeMillis()}",
+                    courseName = resolvedCourseName,
                     title = title,
                     description = "Imported course: $title",
                     difficulty = difficulty,
@@ -100,7 +108,7 @@ class ImportViewModel @Inject constructor(
                     updatedAt = System.currentTimeMillis()
                 )
 
-                courseRepository.insertCourse(course)
+                importCourseUseCase(course)
 
                 _importState.value = ImportState.SUCCESS
 

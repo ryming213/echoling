@@ -1,4 +1,38 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Echo Ling</string>
+
+    <!-- Bottom navigation tab labels -->
+    <string name="tab_courses">首页</string>
+    <string name="tab_vocabulary">单词本</string>
+    <!-- Renamed from "学习" to "记单词" — the tab is now a vocabulary
+         category picker; per-category flashcards live on a sub-page. -->
+    <string name="tab_recite">记单词</string>
+    <string name="tab_me">我的</string>
+
+    <!-- Courses tab top bar title -->
+    <string name="courses_title">每天进步一点</string>
+    <string name="courses_subtitle">— Every day a little progress —</string>
+
+    <!-- Me tab top bar title (mirrors Courses two-line layout) -->
+    <string name="me_title">听言英语</string>
+    <string name="me_subtitle">— Listen and Speak Daily —</string>
+
+    <!-- Pronunciation grading (跟读评分). Phase 3 of the practice plan. -->
+    <string name="grade_accuracy">准确度</string>
+    <string name="grade_btn_start">开始跟读评分</string>
+    <string name="grade_clarity">清晰度</string>
+    <string name="grade_completeness">完整度</string>
+    <string name="grade_fluency">流利度</string>
+    <string name="grade_need_permission">需要麦克风权限才能评分</string>
+    <string name="grade_next">下一题</string>
+    <string name="grade_no_speech">未检测到语音，请重试</string>
+    <string name="grade_replay">回放录音</string>
+    <string name="grade_retry">重新评分</string>
+    <string name="grade_tier_excellent">优秀</string>
+    <string name="grade_tier_fail">不合格</string>
+    <string name="grade_tier_good">良好</string>
+    <string name="grade_tier_pass">合格</string>
+    <string name="grade_too_short">录音过短，请重新录制</string>
+    <string name="grade_your_score">本次得分</string>
 </resources>

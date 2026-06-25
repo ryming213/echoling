@@ -80,7 +80,10 @@ private val DarkColorScheme = darkColorScheme(
 @Composable
 fun EchoLingTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
+    // Use static light-purple theme by default so the app matches the
+    // app-icon gradient on all Android versions (Material You dynamic
+    // colors would otherwise pick a blue tint from the user's wallpaper).
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {

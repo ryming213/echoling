@@ -1,9 +1,41 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!--
+        Package visibility queries (Android 11 / API 30+).
+
+        On Android 11+ apps can't see packages they don't explicitly
+        declare an interest in. `PackageManager.queryIntentServices`
+        and `queryIntentActivities` silently return empty for all
+        undeclared packages — this is enforced at the framework level,
+        not the OS level, so it affects even permissions you have.
+
+        TtsManager at com.echoling.app.player.TtsManager uses
+        queryIntentServices(Intent(TTS_SERVICE)) to discover all TTS
+        engines the system has installed. Without this <queries>
+        element, the discovery list is empty even when Google TTS is
+        installed (e.g. Xiaomi Mi 11 CN devices after manually
+        sideloading the Google TTS APK — the package exists, the
+        service works in Settings, but our app can't see it).
+
+        Declaring the TTS_SERVICE intent here lets queryIntentServices
+        return com.google.android.tts / com.iflytek.speechsuite /
+        com.xiaomi.tts / etc. when they're installed.
+
+        Related: see also the QUERY_ALL_PACKAGES-free pattern in
+        https://developer.android.com/training/package-visibility/declaring
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
 
     <application
         android:name=".EchoLingApplication"
@@ -16,7 +48,7 @@
         <activity
             android:name=".presentation.MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.EchoLing">
+            android:theme="@style/Theme.EchoLing.Splash">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

@@ -32,6 +32,18 @@ class SentenceRepositoryImpl @Inject constructor(
         sentenceDao.updateSentence(sentence.toEntity())
     }
 
+    override suspend fun updateCompletedStatus(courseId: String, sentenceId: Int, isCompleted: Boolean) {
+        sentenceDao.updateCompletedStatus(courseId, sentenceId, isCompleted)
+    }
+
+    override suspend fun updateTestedStatus(courseId: String, sentenceId: Int, isTested: Boolean) {
+        sentenceDao.updateTestedStatus(courseId, sentenceId, isTested)
+    }
+
+    override suspend fun syncSentences(sentences: List<Sentence>) {
+        sentenceDao.insertSentencesIfNotExists(sentences.map { it.toEntity() })
+    }
+
     private fun SentenceEntity.toDomain(): Sentence = Sentence(
         courseId = courseId,
         sentenceId = sentenceId,
@@ -41,7 +53,9 @@ class SentenceRepositoryImpl @Inject constructor(
         endTimeMs = endTimeMs,
         isLearned = isLearned,
         isRead = isRead,
-        readScore = readScore
+        readScore = readScore,
+        isCompleted = isCompleted,
+        isTested = isTested
     )
 
     private fun Sentence.toEntity(): SentenceEntity = SentenceEntity(
@@ -53,6 +67,8 @@ class SentenceRepositoryImpl @Inject constructor(
         endTimeMs = endTimeMs,
         isLearned = isLearned,
         isRead = isRead,
-        readScore = readScore
+        readScore = readScore,
+        isCompleted = isCompleted,
+        isTested = isTested
     )
 }

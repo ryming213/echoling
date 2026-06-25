@@ -3,14 +3,11 @@ package com.echoling.app.presentation.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.echoling.app.domain.model.LearningProgress
-import com.echoling.app.domain.repository.CourseRepository
-import com.echoling.app.domain.repository.LearningProgressRepository
-import com.echoling.app.domain.repository.WordRepository
+import com.echoling.app.domain.usecase.GetStatisticsUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import java.util.Calendar
 import javax.inject.Inject
@@ -29,14 +26,19 @@ data class StatisticsUiState(
     val averageDailyTimeMs: Long = 0L,
     val currentStreak: Int = 0,
     val dailyStats: List<DailyStatistic> = emptyList(),
+    /**
+     * 30-day activity, day 0 = today. Same shape as [dailyStats] but
+     * without "Today"/"Yesterday" labels — days 2..29 use the weekday
+     * short name (Mon, Tue, ...) so the labels fit in the thin bar
+     * chart.
+     */
+    val monthlyStats: List<DailyStatistic> = emptyList(),
     val isLoading: Boolean = true
 )
 
 @HiltViewModel
 class StatisticsViewModel @Inject constructor(
-    private val courseRepository: CourseRepository,
-    private val progressRepository: LearningProgressRepository,
-    private val wordRepository: WordRepository
+    private val getStatisticsUseCase: GetStatisticsUseCase
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(StatisticsUiState())
@@ -48,12 +50,17 @@ class StatisticsViewModel @Inject constructor(
 
     private fun loadStatistics() {
         viewModelScope.launch {
-            combine(
-                progressRepository.getAllProgress(),
-                wordRepository.getAllWords()
-            ) { progressList, words ->
+            getStatisticsUseCase.getStatisticsFlow().collect { (progressList, words) ->
                 val totalLearnTime = progressList.sumOf { it.totalLearnTimeMs }
-                val coursesLearned = progressList.count { it.finishRate >= 1.0f }
+                // §12.21: count any course that has a progress row as
+                // "learned". The old `finishRate >= 1.0f` rule was
+                // almost never satisfied (a user rarely plays to the
+                // exact last ms), so the counter was stuck at 0 for
+                // every user. Combined with the eager-save on
+                // loadCourse() (see PracticeViewModel §12.20), the
+                // counter now reflects "courses I've started
+                // practicing" — which matches the user's intent.
+                val coursesLearned = progressList.size
                 val wordsCollected = words.size
                 val wordsMastered = words.count { it.isMastered }
 
@@ -62,14 +69,19 @@ class StatisticsViewModel @Inject constructor(
                 val streak = calculateStreak(sortedProgress)
 
                 // Calculate daily stats (last 7 days)
-                val dailyStats = calculateDailyStats(progressList)
+                val dailyStats = calculateDailyStats(progressList, days = 7)
+                // §12.21: monthly stats (last 30 days) for the wider
+                // chart. Same shape as [dailyStats] but a longer
+                // window; the screen renders it as a thinner bar
+                // chart with day labels every 5th day.
+                val monthlyStats = calculateDailyStats(progressList, days = 30, showTodayLabel = false)
 
-                // Calculate average daily time
+                // Calculate average daily time (over the 7-day window)
                 val avgDailyTime = if (dailyStats.isNotEmpty()) {
                     dailyStats.sumOf { it.learnTimeMs } / dailyStats.size
                 } else 0L
 
-                StatisticsUiState(
+                _uiState.value = StatisticsUiState(
                     totalLearnTimeMs = totalLearnTime,
                     totalCoursesLearned = coursesLearned,
                     totalWordsCollected = wordsCollected,
@@ -77,10 +89,9 @@ class StatisticsViewModel @Inject constructor(
                     averageDailyTimeMs = avgDailyTime,
                     currentStreak = streak,
                     dailyStats = dailyStats,
+                    monthlyStats = monthlyStats,
                     isLoading = false
                 )
-            }.collect { state ->
-                _uiState.value = state
             }
         }
     }
@@ -124,11 +135,15 @@ class StatisticsViewModel @Inject constructor(
         return streak
     }
 
-    private fun calculateDailyStats(progressList: List<LearningProgress>): List<DailyStatistic> {
+    private fun calculateDailyStats(
+        progressList: List<LearningProgress>,
+        days: Int,
+        showTodayLabel: Boolean = true,
+    ): List<DailyStatistic> {
         val stats = mutableListOf<DailyStatistic>()
         val calendar = Calendar.getInstance()
 
-        for (i in 6 downTo 0) {
+        for (i in (days - 1) downTo 0) {
             val dayCalendar = Calendar.getInstance().apply {
                 add(Calendar.DAY_OF_YEAR, -i)
                 set(Calendar.HOUR_OF_DAY, 0)
@@ -143,9 +158,9 @@ class StatisticsViewModel @Inject constructor(
             val learnTime = dayProgress.sumOf { it.totalLearnTimeMs }
             val sentencesLearned = dayProgress.sumOf { it.learnedSentences }
 
-            val dayLabel = when (i) {
-                0 -> "Today"
-                1 -> "Yesterday"
+            val dayLabel = when {
+                showTodayLabel && i == 0 -> "Today"
+                showTodayLabel && i == 1 -> "Yesterday"
                 else -> {
                     calendar.timeInMillis = dayStart
                     calendar.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, java.util.Locale.getDefault()) ?: ""

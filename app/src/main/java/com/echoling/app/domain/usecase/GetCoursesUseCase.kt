@@ -1,16 +1,14 @@
-package com.echoling.app.data.local
+package com.echoling.app.domain.usecase
 
 import com.echoling.app.domain.model.Course
 import com.echoling.app.domain.repository.CourseRepository
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.Flow
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class DatabaseSeeder @Inject constructor(
+class GetCoursesUseCase @Inject constructor(
     private val courseRepository: CourseRepository
 ) {
-    suspend fun seedIfEmpty() {
-        // Demo courses removed - user imports their own courses
-    }
+    operator fun invoke(): Flow<List<Course>> = courseRepository.getAllCourses()
 }

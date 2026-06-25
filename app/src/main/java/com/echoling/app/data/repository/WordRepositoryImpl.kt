@@ -45,6 +45,7 @@ class WordRepositoryImpl @Inject constructor(
     private fun WordEntity.toDomain(): Word = Word(
         word = word,
         phonetic = phonetic,
+        pos = pos,
         translation = translation,
         exampleSentence = exampleSentence,
         sourceCourseId = sourceCourseId,
@@ -52,12 +53,13 @@ class WordRepositoryImpl @Inject constructor(
         isMastered = isMastered,
         collectedAt = collectedAt,
         reviewCount = reviewCount,
-        nextReviewTime = nextReviewTime
+        nextReviewTime = nextReviewTime,
     )
 
     private fun Word.toEntity(): WordEntity = WordEntity(
         word = word,
         phonetic = phonetic,
+        pos = pos,
         translation = translation,
         exampleSentence = exampleSentence,
         sourceCourseId = sourceCourseId,
@@ -65,6 +67,6 @@ class WordRepositoryImpl @Inject constructor(
         isMastered = isMastered,
         collectedAt = collectedAt,
         reviewCount = reviewCount,
-        nextReviewTime = nextReviewTime
+        nextReviewTime = nextReviewTime,
     )
 }
