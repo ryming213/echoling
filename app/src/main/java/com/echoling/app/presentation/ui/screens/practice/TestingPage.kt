@@ -1,10 +1,8 @@
 package com.echoling.app.presentation.ui.screens.practice
 
-import android.Manifest
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -16,12 +14,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
-import com.echoling.app.R
-import com.echoling.app.presentation.ui.screens.practice.components.ScoreCard
-import com.echoling.app.presentation.viewmodel.GradeState
+import com.echoling.app.presentation.ui.screens.practice.components.RecordingOverlay
+import com.echoling.app.presentation.ui.screens.practice.components.TestResultCard
+import com.echoling.app.presentation.ui.screens.practice.components.TranscriptionEditor
 import com.echoling.app.presentation.viewmodel.PracticeViewModel
+import com.echoling.app.presentation.viewmodel.SttTestState
 
 @Composable
 fun TestingPage(
@@ -31,9 +30,8 @@ fun TestingPage(
     val subtitles by viewModel.subtitles.collectAsState()
     val testState by viewModel.testState.collectAsState()
     val sentenceStates by viewModel.sentenceStates.collectAsState()
-    val gradeState by viewModel.gradeState.collectAsState()
-    val recordingPath by viewModel.recordingPath.collectAsState()
-    val snackbarHostState = remember { SnackbarHostState() }
+    val sttTestState by viewModel.sttTestState.collectAsState()
+    val sttAmplitudeBars by viewModel.sttAmplitudeBars.collectAsState()
 
     val currentTest = testState.testItems.getOrNull(testState.currentTestIndex)
     val currentRealIndex = subtitles.indexOf(currentTest)
@@ -41,122 +39,118 @@ fun TestingPage(
         sentenceStates[subtitles[it].index]
     }
 
-    // Permission launcher — only start recording if granted.
-    // Denied: stay in Idle so the user can retry; the next time they
-    // tap the mic we re-launch.
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            viewModel.startRecordingForGrading()
-        } else {
-            // snackbar handled below via gradeState.Error if VM surfaces one;
-            // otherwise user just sees no recording start. They can tap again.
-        }
-    }
+    Column(modifier = modifier.fillMaxSize()) {
+        // Test progress header
+        TestingProgressHeader(
+            testedCount = testState.testedCount,
+            totalCount = if (testState.isActive) testState.testItems.size else subtitles.size,
+            isTestActive = testState.isActive,
+            onStartTest = { viewModel.startTestMode() },
+            onResetTest = { /* Could add reset functionality */ }
+        )
 
-    // Surface Error state to the user, then reset to Idle so the
-    // snackbar doesn't re-show on recomposition.
-    LaunchedEffect(gradeState) {
-        val state = gradeState
-        if (state is GradeState.Error) {
-            snackbarHostState.showSnackbar(
-                message = state.message,
-                duration = SnackbarDuration.Short,
-            )
-            viewModel.cancelGrading()
-        }
-    }
-
-    Box(modifier = modifier.fillMaxSize()) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // Test progress header
-            TestingProgressHeader(
-                testedCount = testState.testedCount,
-                totalCount = if (testState.isActive) testState.testItems.size else subtitles.size,
-                isTestActive = testState.isActive,
+        if (!testState.isActive || testState.testItems.isEmpty()) {
+            // Empty state - prompt to start test
+            TestingEmptyState(
                 onStartTest = { viewModel.startTestMode() },
-                onResetTest = { /* Could add reset functionality */ }
+                modifier = Modifier.weight(1f)
             )
-
-            if (!testState.isActive || testState.testItems.isEmpty()) {
-                // Empty state - prompt to start test
-                TestingEmptyState(
-                    onStartTest = { viewModel.startTestMode() },
-                    modifier = Modifier.weight(1f)
+        } else {
+            // Test item card
+            currentTest?.let { sub ->
+                TestingSubtitleCard(
+                    subtitle = sub,
+                    revealedWords = testState.revealedWords,
+                    isTested = currentSentenceState?.isTested == true,
+                    onWordReveal = { viewModel.revealTestWord(it) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
                 )
-            } else {
-                // Test item card
-                currentTest?.let { sub ->
-                    TestingSubtitleCard(
-                        subtitle = sub,
-                        revealedWords = testState.revealedWords,
-                        isTested = currentSentenceState?.isTested == true,
-                        onWordReveal = { viewModel.revealTestWord(it) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
-                    )
-                }
+            }
 
-                // ─── ScoreCard overlay: show after a successful grade,
-                // anchored above the control bar. Only show for the
-                // sentence that was actually graded (don't follow if
-                // user already advanced to the next item).
-                val successState = (gradeState as? GradeState.Success)
-                if (successState != null &&
-                    currentTest != null &&
-                    successState.sentenceId == currentTest.index &&
-                    recordingPath != null
-                ) {
-                    ScoreCard(
-                        result = successState.result,
-                        onReplayRecording = { viewModel.playRecording() },
-                        onRegrade = { viewModel.startRecordingForGrading() },
-                        onNextItem = {
-                            viewModel.markSentenceTested(currentTest.index, true)
-                            viewModel.nextTestItem()
-                            viewModel.cancelGrading()
-                        },
+            // ─── STT overlay: show based on sttTestState, anchored above
+            // the control bar. Only show for the current test item.
+            when (val s = sttTestState) {
+                is SttTestState.Idle -> { /* nothing */ }
+                is SttTestState.Listening -> {
+                    RecordingOverlay(
+                        elapsedMs = s.elapsedMs,
+                        amplitudeBars = sttAmplitudeBars,
+                        onCancel = { viewModel.cancelStt() },
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp)
                     )
                 }
-
-                Spacer(Modifier.weight(1f))
-
-                // Test control bar
-                TestingControlBar(
-                    currentIndex = testState.currentTestIndex,
-                    totalCount = testState.testItems.size,
-                    isTested = currentSentenceState?.isTested == true,
-                    gradeState = gradeState,
-                    onPrevious = { viewModel.previousTestItem() },
-                    onMarkTested = {
-                        currentTest?.let {
-                            viewModel.markSentenceTested(it.index, true)
-                            viewModel.nextTestItem()
-                        }
-                    },
-                    onPlayAudio = {
-                        currentTest?.let { viewModel.playSubtitleOnce(it) }
-                    },
-                    onStartGrading = {
-                        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    },
-                    onStopAndGrade = { viewModel.stopAndGrade() },
-                )
+                is SttTestState.Transcribed -> {
+                    TranscriptionEditor(
+                        initialText = s.text,
+                        onTextChange = { /* editor manages internally */ },
+                        onSubmit = { text -> viewModel.submitTranscription(text) },
+                        onRerecord = { viewModel.resetStt() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
+                is SttTestState.Passed -> {
+                    TestResultCard(
+                        state = s,
+                        originalEn = currentTest?.contentEn.orEmpty(),
+                        onNextItem = {
+                            currentTest?.let {
+                                viewModel.markSentenceTested(it.index, true)
+                                viewModel.nextTestItem()
+                                viewModel.resetStt()
+                            }
+                        },
+                        onRerecord = { viewModel.resetStt() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
+                is SttTestState.Failed -> {
+                    TestResultCard(
+                        state = s,
+                        originalEn = s.original,
+                        onNextItem = {
+                            currentTest?.let {
+                                viewModel.nextTestItem()
+                                viewModel.resetStt()
+                            }
+                        },
+                        onRerecord = { viewModel.resetStt() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
             }
-        }
 
-        // Snackbar host — floats above the control bar
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 96.dp),
-        )
+            Spacer(Modifier.weight(1f))
+
+            // Test control bar
+            TestingControlBar(
+                currentIndex = testState.currentTestIndex,
+                totalCount = testState.testItems.size,
+                isTested = currentSentenceState?.isTested == true,
+                isSttListening = sttTestState is SttTestState.Listening,
+                onPrevious = { viewModel.previousTestItem() },
+                onMarkTested = {
+                    currentTest?.let {
+                        viewModel.markSentenceTested(it.index, true)
+                        viewModel.nextTestItem()
+                    }
+                },
+                onPlayAudio = {
+                    currentTest?.let { viewModel.playSubtitleOnce(it) }
+                },
+                onPressMic = { viewModel.startStt() },
+                onReleaseMic = { viewModel.stopStt() },
+            )
+        }
     }
 }
 
@@ -416,12 +410,12 @@ private fun TestingControlBar(
     currentIndex: Int,
     totalCount: Int,
     isTested: Boolean,
-    gradeState: GradeState,
+    isSttListening: Boolean,
     onPrevious: () -> Unit,
     onMarkTested: () -> Unit,
     onPlayAudio: () -> Unit,
-    onStartGrading: () -> Unit,
-    onStopAndGrade: () -> Unit,
+    onPressMic: () -> Unit,
+    onReleaseMic: () -> Unit,
 ) {
     // Pill-shaped background frame matching the other practice pages'
     // bottom bars. Houses 4 large action buttons (previous / play
@@ -480,41 +474,37 @@ private fun TestingControlBar(
                 }
             }
 
-            // 3. Microphone (grade this sentence) - center
-            val isRecording = gradeState is GradeState.Recording
-            val isLoading = gradeState is GradeState.Loading
-            IconButton(
-                onClick = if (isRecording) onStopAndGrade else onStartGrading,
-                enabled = !isLoading,
+            // 3. Microphone (press and hold to record, release to stop)
+            Box(
+                modifier = Modifier
+                    .size(54.dp)
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onPress = {
+                                onPressMic()
+                                tryAwaitRelease()
+                                onReleaseMic()
+                            }
+                        )
+                    }
             ) {
                 Surface(
                     shape = CircleShape,
-                    color = when {
-                        isRecording -> MaterialTheme.colorScheme.error
-                        isLoading -> MaterialTheme.colorScheme.surfaceVariant
-                        else -> MaterialTheme.colorScheme.primaryContainer
-                    },
-                    modifier = Modifier.size(54.dp)
+                    color = if (isSttListening) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.fillMaxSize()
                 ) {
-                    if (isLoading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier
-                                .padding(12.dp)
-                                .size(30.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    } else {
-                        Icon(
-                            if (isRecording) Icons.Default.Stop else Icons.Default.Mic,
-                            if (isRecording) "停止并评分" else stringResource(R.string.grade_btn_start),
-                            modifier = Modifier.size(26.dp),
-                            tint = if (isRecording)
-                                MaterialTheme.colorScheme.onError
-                            else
-                                MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                    }
+                    Icon(
+                        Icons.Default.Mic,
+                        contentDescription = if (isSttListening) "正在录音，松开结束" else "按住录音",
+                        modifier = Modifier
+                            .size(26.dp)
+                            .align(Alignment.Center),
+                        tint = if (isSttListening)
+                            MaterialTheme.colorScheme.onError
+                        else
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                    )
                 }
             }
 
