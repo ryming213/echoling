@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.echoling.app.presentation.viewmodel.SttTestState
 
+@OptIn(ExperimentalLayoutApi::class)
 /**
  * Result card shown after the user submits their transcription.
  * Passed: green card with "下一题" button.
