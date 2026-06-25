@@ -33,4 +33,4 @@ interface SentenceDao {
     @Query("UPDATE sentences SET isTested = :isTested WHERE courseId = :courseId AND sentenceId = :sentenceId")
     suspend fun updateTestedStatus(courseId: String, sentenceId: Int, isTested: Boolean)
 
-    }
+}
