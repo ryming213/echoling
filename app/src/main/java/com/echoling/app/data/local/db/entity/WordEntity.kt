@@ -8,6 +8,7 @@ data class WordEntity(
     @PrimaryKey
     val word: String,
     val phonetic: String,
+    val pos: String,
     val translation: String,
     val exampleSentence: String,
     val sourceCourseId: String,
@@ -15,5 +16,5 @@ data class WordEntity(
     val isMastered: Boolean = false,
     val collectedAt: Long,
     val reviewCount: Int = 0,
-    val nextReviewTime: Long
+    val nextReviewTime: Long,
 )

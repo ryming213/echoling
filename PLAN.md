@@ -109,8 +109,9 @@ data class CourseEntity(
     val title: String,
     val description: String,
     val difficulty: String,
-    val audioUri: String,
-    val subtitleUri: String,
+    val audioUri: String?,
+    val videoUri: String?,
+    val subtitleUri: String?,
     val durationMs: Long,
     val totalSentences: Int,
     val thumbnailUri: String?,
@@ -118,6 +119,8 @@ data class CourseEntity(
     val updatedAt: Long
 )
 ```
+
+> **注意**：以上为设计参考模型。实际代码中的 Entity 定义是权威来源，详见 `data/local/db/entity/CourseEntity.kt`。
 
 ### 4.2 句子实体 SentenceEntity
 ```kotlin
@@ -132,11 +135,12 @@ data class SentenceEntity(
     val contentCn: String,
     val startTimeMs: Long,
     val endTimeMs: Long,
-    val isLearned: Boolean = false,
-    val isRead: Boolean = false,
-    val readScore: Int = 0
+    val isCompleted: Boolean = false,
+    val isTested: Boolean = false
 )
 ```
+
+> **注意**：以上为设计参考模型。实际代码中的 Entity 定义是权威来源，详见 `data/local/db/entity/SentenceEntity.kt`。字段名以代码为准（`isCompleted`/`isTested`）。
 
 ### 4.3 学习进度实体 LearningProgressEntity
 ```kotlin
@@ -188,8 +192,10 @@ data class WordEntity(
 ### 分层调用规则
 - UI层 仅访问 ViewModel
 - ViewModel 仅访问 UseCase
-- UseCase 仅访问 Repository
-- Repository 仅访问数据源
+- UseCase 仅访问 Repository（接口）
+- Repository 实现 仅访问数据源（Dao）
+
+> **当前状态**：UseCase 层已实施（14个 UseCase，位于 `domain/usecase/`）。所有 ViewModel 通过 UseCase 间接调用 Repository。UseCase 使用 `@Singleton` + `@Inject constructor` 由 Hilt 自动注入。
 
 ### 异步处理规则
 - 所有异步操作通过 Coroutines+Flow 实现

@@ -9,5 +9,7 @@ data class Sentence(
     val endTimeMs: Long,
     val isLearned: Boolean = false,
     val isRead: Boolean = false,
-    val readScore: Int = 0
+    val readScore: Int = 0,
+    val isCompleted: Boolean = false,
+    val isTested: Boolean = false
 )

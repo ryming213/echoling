@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tier colors for pronunciation scoring. Used by ScoreCard. -->
+    <color name="tier_excellent">#FF2E7D32</color>  <!-- 绿 -->
+    <color name="tier_good">#FF1976D2</color>       <!-- 蓝 -->
+    <color name="tier_pass">#FFF9A825</color>       <!-- 黄 -->
+    <color name="tier_fail">#FFC62828</color>       <!-- 红 -->
+</resources>

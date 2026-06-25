@@ -1,4 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!--
+      Solid color drawn behind the splash image by `splash_background.xml`.
+      The splash image is now a 9:20 illustration (1080×2400), which exactly
+      matches a 9:20 phone screen, so on standard Android phones the image
+      fills the window edge-to-edge with no letterbox at all. This color is
+      only ever seen on the rare device whose aspect ratio is taller than
+      9:20 (a handful of 9:21 phones), or for one frame at the very start
+      of cold launch before the layer-list has finished drawing. It is
+      sampled from the bottom-left / bottom-right corner of the illustration
+      (#9C84C2) so any margin is visually indistinguishable from the image.
+    -->
+    <color name="splash_background">#9C84C2</color>
+
+    <!-- Main app theme. Used by Compose at runtime via `setTheme(...)` -->
     <style name="Theme.EchoLing" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!--
+      Launcher activity theme. Applied via AndroidManifest's
+      `android:theme` so the system paints the splash image as the window
+      background the instant the activity is created — this kills the
+      pre-Compose white flash. `MainActivity.onCreate` calls
+      `setTheme(R.style.Theme_EchoLing)` immediately, before super, so
+      Compose itself runs under the regular (un-themed) parent.
+    -->
+    <style name="Theme.EchoLing.Splash" parent="Theme.EchoLing">
+        <item name="android:windowBackground">@drawable/splash_background</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
 </resources>

@@ -34,6 +34,7 @@ class CourseRepositoryImpl @Inject constructor(
 
     private fun CourseEntity.toDomain(): Course = Course(
         courseId = courseId,
+        courseName = courseName,
         title = title,
         description = description,
         difficulty = difficulty,
@@ -49,6 +50,7 @@ class CourseRepositoryImpl @Inject constructor(
 
     private fun Course.toEntity(): CourseEntity = CourseEntity(
         courseId = courseId,
+        courseName = courseName,
         title = title,
         description = description,
         difficulty = difficulty,

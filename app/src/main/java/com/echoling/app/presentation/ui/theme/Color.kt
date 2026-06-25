@@ -2,23 +2,23 @@ package com.echoling.app.presentation.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Primary colors - Teal/Green for learning focus
-val Primary = Color(0xFF00897B)
+// Primary colors - Deep Purple (matches app icon gradient bottom: #7A2BE0)
+val Primary = Color(0xFF7C3AED)            // violet-600, deep vibrant purple
 val OnPrimary = Color(0xFFFFFFFF)
-val PrimaryContainer = Color(0xFFB2DFDB)
-val OnPrimaryContainer = Color(0xFF00251A)
+val PrimaryContainer = Color(0xFFDDD6FE)   // light purple tint (container for contrast)
+val OnPrimaryContainer = Color(0xFF2E1065) // very dark purple text on container
 
-// Secondary colors
-val Secondary = Color(0xFF4DB6AC)
+// Secondary colors - deep purple, slightly different hue
+val Secondary = Color(0xFF8B5CF6)          // violet-500
 val OnSecondary = Color(0xFFFFFFFF)
-val SecondaryContainer = Color(0xFFCEFAF5)
-val OnSecondaryContainer = Color(0xFF002020)
+val SecondaryContainer = Color(0xFFEDE9FE)
+val OnSecondaryContainer = Color(0xFF2E1065)
 
-// Tertiary colors
-val Tertiary = Color(0xFF7E57C2)
+// Tertiary colors - even deeper purple
+val Tertiary = Color(0xFF6D28D9)           // violet-700
 val OnTertiary = Color(0xFFFFFFFF)
-val TertiaryContainer = Color(0xFFEDE7F6)
-val OnTertiaryContainer = Color(0xFF1A0033)
+val TertiaryContainer = Color(0xFFC4B5FD)
+val OnTertiaryContainer = Color(0xFF1E1147)
 
 // Error colors
 val Error = Color(0xFFB00020)
@@ -51,10 +51,10 @@ val OnBackgroundDark = Color(0xFFE6E1E5)
 // Inverse
 val InverseSurface = Color(0xFF313033)
 val InverseOnSurface = Color(0xFFF4EFF4)
-val InversePrimary = Color(0xFF80CBC4)
+val InversePrimary = Color(0xFFA78BFA)     // lighter purple for dark theme contrast
 
 // Scrim
 val Scrim = Color(0xFF000000)
 
-// Seed color for dynamic theming
-val SeedColor = Color(0xFF00897B)
+// Seed color for dynamic theming (kept for reference; not used when dynamicColor=false)
+val SeedColor = Color(0xFF7C3AED)

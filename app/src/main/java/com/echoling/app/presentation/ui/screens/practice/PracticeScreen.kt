@@ -1,635 +1,181 @@
 package com.echoling.app.presentation.ui.screens.practice
 
-import android.Manifest
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.RecordVoiceOver
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
-import com.echoling.app.R
-import com.echoling.app.player.subtitle.Subtitle
+import androidx.media3.exoplayer.ExoPlayer
 import com.echoling.app.player.subtitle.SubtitleMode
 import com.echoling.app.presentation.viewmodel.PracticeViewModel
-import com.echoling.app.speech.RecordingState
+import com.echoling.app.presentation.viewmodel.WordTranslationState
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PracticeScreen(
     courseId: String,
     onNavigateBack: () -> Unit,
     viewModel: PracticeViewModel = hiltViewModel()
 ) {
-    val playbackState by viewModel.playbackState.collectAsState()
-    val recordingState by viewModel.recordingState.collectAsState()
     val subtitleMode by viewModel.subtitleMode.collectAsState()
-    val subtitles by viewModel.subtitles.collectAsState()
-    val currentSubtitleIndex by viewModel.currentSubtitleIndex.collectAsState()
-    val recordingPath by viewModel.recordingPath.collectAsState()
-    val isPlayingRecording by viewModel.isPlayingRecording.collectAsState()
-    val isVideoMode by viewModel.isVideoMode.collectAsState()
-    val videoPlayerState by viewModel.videoPlayerState.collectAsState()
-    var currentSubtitle by remember { mutableStateOf<String?>(null) }
-    var showWordDialog by remember { mutableStateOf(false) }
-    var selectedWord by remember { mutableStateOf("") }
-    var showRecordingUI by remember { mutableStateOf(true) }
-    var hasRecordPermission by remember { mutableStateOf(false) }
+    val currentPage by viewModel.currentPage.collectAsState()
 
-    // Track revealed words per subtitle index
-    var revealedWords by remember { mutableStateOf<Map<Int, Set<Int>>>(emptyMap()) }
-    // Track if all are currently revealed
-    var allRevealed by remember { mutableStateOf(false) }
-
-    val lazyListState = rememberLazyListState()
-
-    // Auto-scroll to position current subtitle in middle of screen for better visibility
-    LaunchedEffect(currentSubtitleIndex) {
-        if (currentSubtitleIndex >= 0 && subtitles.isNotEmpty() && !lazyListState.isScrollInProgress) {
-            val index = currentSubtitleIndex.coerceIn(0, subtitles.size - 1)
-            // Position at upper-middle of screen (offset -100) so current subtitle stays visible
-            lazyListState.animateScrollToItem(index, scrollOffset = -160)
-        }
-    }
-
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        hasRecordPermission = isGranted
-        if (isGranted) {
-            viewModel.startRecording()
-        }
-    }
-
+    // Initialize on first composition
     LaunchedEffect(courseId) {
-        try {
-            viewModel.initializePlayer()
-            viewModel.loadCourse(courseId)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        viewModel.initializePlayer()
+        viewModel.loadCourse(courseId)
+        viewModel.loadSentenceStates(courseId)
     }
 
-    LaunchedEffect(playbackState.currentPositionMs, subtitleMode) {
-        currentSubtitle = viewModel.getCurrentSubtitle()
+    // Reload sentence states when switching to SpeakingPage
+    LaunchedEffect(currentPage) {
+        if (currentPage == PracticeViewModel.PracticePage.SPEAKING) {
+            viewModel.loadSentenceStates(courseId)
+        }
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = "跟读练习",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
-                    }
-                },
-                actions = {
-                    // Subtitle mode pill
-                    Surface(
-                        onClick = { viewModel.cycleSubtitleMode() },
-                        shape = RoundedCornerShape(20.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Translate,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                            Text(
-                                text = when (subtitleMode) {
-                                    SubtitleMode.BILINGUAL -> "双语"
-                                    SubtitleMode.ENGLISH -> "英语"
-                                    SubtitleMode.CHINESE -> "中文"
-                                },
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    IconButton(onClick = { showRecordingUI = !showRecordingUI }) {
-                        Icon(
-                            imageVector = Icons.Outlined.RecordVoiceOver,
-                            contentDescription = "跟读开关"
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Transparent
-                )
-            )
-        }
+        // No topBar — back / title / subtitle pill live in a single slim
+        // Row right below the status bar (§12.18). This keeps the video
+        // player edge-to-edge while still exposing the back action and
+        // the subtitle mode toggle right next to the TabRow.
     ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
+                .padding(padding),
         ) {
-            // Video Player (when in video mode)
-            if (isVideoMode && videoPlayerState != null) {
-                VideoPlayerSection(
-                    exoPlayer = videoPlayerState!!,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
-                )
-            }
-
-            // Compact Playback Controls
-            PlaybackControlsBar(
-                isPlaying = playbackState.isPlaying,
-                isLooping = playbackState.isLooping,
-                playbackSpeed = playbackState.playbackSpeed,
-                currentPosition = playbackState.currentPositionMs,
-                duration = playbackState.durationMs,
-                onPlayPause = {
-                    if (playbackState.isPlaying) viewModel.pause() else viewModel.play()
-                },
-                onSeekBackward = { viewModel.seekBackward() },
-                onSeekForward = { viewModel.seekForward() },
-                onToggleLoop = { viewModel.toggleLooping() },
-                onSpeedChange = { viewModel.setPlaybackSpeed(it) },
-                onSeek = { viewModel.seekTo(it) }
-            )
-
-            // Subtitle List Header
+            // Compact back-button + title row
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .height(48.dp)
+                    .background(MaterialTheme.colorScheme.surface),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = "字幕列表",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = "${subtitles.size}句",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                )
-            }
-
-            // Subtitle List
-            LazyColumn(
-                state = lazyListState,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                itemsIndexed(subtitles) { index, subtitle ->
-                    SubtitleCard(
-                        subtitle = subtitle,
-                        subtitleMode = subtitleMode,
-                        isActive = index == currentSubtitleIndex,
-                        isAllRevealed = allRevealed,
-                        revealedWords = revealedWords[index] ?: emptySet(),
-                        onClick = {
-                            viewModel.playSubtitleOnce(subtitle)
-                        },
-                        onWordReveal = { wordIdx ->
-                            if (!allRevealed) {
-                                val current = revealedWords[index] ?: emptySet()
-                                revealedWords = revealedWords + (index to if (current.contains(wordIdx)) {
-                                    current - wordIdx
-                                } else {
-                                    current + wordIdx
-                                })
-                            }
-                        },
-                        onWordLongClick = { word ->
-                            selectedWord = word
-                            showWordDialog = true
-                        },
-                        listIndex = index + 1
+                IconButton(onClick = onNavigateBack) {
+                    Icon(
+                        imageVector = Icons.Filled.ArrowBack,
+                        contentDescription = "返回",
                     )
                 }
-                item { Spacer(modifier = Modifier.height(16.dp)) }
+                Text(
+                    text = "跟读练习",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                    // §12.21: left-align the title — the back button
+                    // and subtitle-mode pill visually anchor the
+                    // row's left/right edges, so the title belongs on
+                    // the left rather than floating centered.
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Start,
+                )
+                // Subtitle mode pill
+                Surface(
+                    onClick = { viewModel.cycleSubtitleMode() },
+                    shape = MaterialTheme.shapes.small,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.padding(end = 8.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Translate,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Text(
+                            text = when (subtitleMode) {
+                                SubtitleMode.BILINGUAL -> "双语"
+                                SubtitleMode.ENGLISH -> "英语"
+                                SubtitleMode.CHINESE -> "中文"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
             }
 
-            // Bottom Controls Row - evenly distributed
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
+            // Tab Row for page switching
+            TabRow(
+                selectedTabIndex = currentPage.ordinal,
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.primary
             ) {
-                // Left: Toggle visibility button
-                IconButton(
-                    onClick = {
-                        allRevealed = !allRevealed
-                        if (allRevealed) {
-                            revealedWords = emptyMap()
-                        }
-                    },
-                    modifier = Modifier.size(54.dp)
-                ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = if (allRevealed)
-                            MaterialTheme.colorScheme.surfaceVariant
-                        else
-                            MaterialTheme.colorScheme.primary
-                    ) {
-                        Icon(
-                            imageVector = if (allRevealed) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                            contentDescription = null,
-                            modifier = Modifier.size(26.dp),
-                            tint = if (allRevealed)
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            else
-                                MaterialTheme.colorScheme.onPrimary
-                        )
-                    }
-                }
-
-                // Center: Play/Pause button
-                IconButton(
-                    onClick = {
-                        if (playbackState.isPlaying) viewModel.pause() else viewModel.play()
-                    },
-                    modifier = Modifier.size(54.dp)
-                ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.primary
-                    ) {
-                        Icon(
-                            imageVector = if (playbackState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (playbackState.isPlaying) "暂停" else "播放",
-                            modifier = Modifier.size(28.dp),
-                            tint = MaterialTheme.colorScheme.onPrimary
-                        )
-                    }
-                }
-
-                // Right: Recording controls (always show both buttons)
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Recording button
-                    IconButton(
+                PracticeViewModel.PracticePage.entries.forEach { page ->
+                    Tab(
+                        selected = currentPage == page,
                         onClick = {
-                            if (recordingState == RecordingState.RECORDING) {
-                                viewModel.stopRecording()
-                            } else {
-                                if (hasRecordPermission) {
-                                    viewModel.startRecording()
-                                } else {
-                                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                }
+                            if (currentPage != page) {
+                                viewModel.pause()
                             }
+                            viewModel.setCurrentPage(page)
                         },
-                        modifier = Modifier.size(54.dp)
-                    ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = if (recordingState == RecordingState.RECORDING)
-                                Color.Red
-                            else
-                                MaterialTheme.colorScheme.secondaryContainer
-                        ) {
-                            Icon(
-                                imageVector = if (recordingState == RecordingState.RECORDING)
-                                    Icons.Default.Stop
-                                else
-                                    Icons.Default.Mic,
-                                contentDescription = "录音",
-                                modifier = Modifier.size(26.dp),
-                                tint = if (recordingState == RecordingState.RECORDING)
-                                    Color.White
-                                else
-                                    MaterialTheme.colorScheme.onSecondaryContainer
-                            )
-                        }
-                    }
-
-                    // Play recording button (always visible when recording exists)
-                    if (recordingPath != null) {
-                        IconButton(
-                            onClick = if (isPlayingRecording) {{ viewModel.stopPlayingRecording() }} else {{ viewModel.playRecording() }},
-                            modifier = Modifier.size(54.dp)
-                        ) {
-                            Surface(
-                                shape = CircleShape,
-                                color = if (isPlayingRecording)
-                                    MaterialTheme.colorScheme.primary
-                                else
-                                    MaterialTheme.colorScheme.primaryContainer
+                        text = {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Icon(
-                                    imageVector = if (isPlayingRecording) Icons.Default.Stop else Icons.Default.PlayArrow,
-                                    contentDescription = if (isPlayingRecording) "停止" else "播放录音",
-                                    modifier = Modifier.size(26.dp),
-                                    tint = if (isPlayingRecording)
-                                        Color.White
-                                    else
-                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                    imageVector = when (page) {
+                                        PracticeViewModel.PracticePage.LISTENING -> Icons.Default.Headphones
+                                        PracticeViewModel.PracticePage.SPEAKING -> Icons.Default.RecordVoiceOver
+                                        PracticeViewModel.PracticePage.TESTING -> Icons.Default.Quiz
+                                    },
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = when (page) {
+                                        PracticeViewModel.PracticePage.LISTENING -> "泛听"
+                                        PracticeViewModel.PracticePage.SPEAKING -> "精听"
+                                        PracticeViewModel.PracticePage.TESTING -> "测试"
+                                    }
                                 )
                             }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Word Save Dialog
-    if (showWordDialog) {
-        WordSaveDialog(
-            word = selectedWord,
-            onDismiss = { showWordDialog = false },
-            onSave = { translation ->
-                viewModel.saveWord(selectedWord, translation, currentSubtitle ?: "")
-                showWordDialog = false
-            }
-        )
-    }
-}
-
-@Composable
-private fun SubtitleCard(
-    subtitle: Subtitle,
-    subtitleMode: SubtitleMode,
-    isActive: Boolean,
-    isAllRevealed: Boolean,
-    revealedWords: Set<Int>,
-    onClick: () -> Unit,
-    onWordReveal: (Int) -> Unit,
-    onWordLongClick: (String) -> Unit,
-    listIndex: Int = subtitle.index
-) {
-    val cardElevation by animateFloatAsState(
-        targetValue = if (isActive) 6f else 1f,
-        animationSpec = spring(stiffness = Spring.StiffnessLow),
-        label = "card_elevation"
-    )
-
-    val content = subtitle.getContent(subtitleMode)
-    val words = content.split(Regex("\\s+")).filter { it.isNotEmpty() }
-
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .shadow(cardElevation.dp, RoundedCornerShape(12.dp))
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick),
-        color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Row(modifier = Modifier.fillMaxWidth()) {
-            // Active indicator bar
-            if (isActive) {
-                Box(
-                    modifier = Modifier
-                        .width(3.dp)
-                        .fillMaxHeight()
-                        .background(MaterialTheme.colorScheme.primary)
-                )
-            }
-
-            Column(
-                modifier = Modifier.padding(12.dp)
-            ) {
-                // Sentence number and words in same row
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "${listIndex}.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (isActive)
-                            MaterialTheme.colorScheme.primary
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        selectedContentColor = MaterialTheme.colorScheme.primary,
+                        unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    // Words with cover effect
-                    if (isAllRevealed) {
-                        WordsRevealedRow(
-                            words = words,
-                            onWordLongClick = onWordLongClick
-                        )
-                    } else {
-                        WordsCoveredRow(
-                            words = words,
-                            revealedWords = revealedWords,
-                            onWordReveal = onWordReveal,
-                            onWordLongClick = onWordLongClick
-                        )
-                    }
                 }
             }
-        }
-    }
-}
 
-@Composable
-private fun WordsRevealedRow(
-    words: List<String>,
-    onWordLongClick: (String) -> Unit
-) {
-    // Use a simple wrapping approach - build rows that fit content
-    WrapWordsRow(
-        words = words.map { it.replace(Regex("[^\\w']"), "") }.filter { it.isNotEmpty() },
-        isRevealed = true,
-        onWordClick = { },
-        onWordLongClick = onWordLongClick
-    )
-}
-
-@Composable
-private fun WordsCoveredRow(
-    words: List<String>,
-    revealedWords: Set<Int>,
-    onWordReveal: (Int) -> Unit,
-    onWordLongClick: (String) -> Unit
-) {
-    // Map words to reveal state
-    WrapWordsRow(
-        words = words.map { it.replace(Regex("[^\\w']"), "") }.filter { it.isNotEmpty() },
-        isRevealed = false,
-        revealedIndices = revealedWords,
-        onWordClick = onWordReveal,
-        onWordLongClick = onWordLongClick
-    )
-}
-
-@Composable
-private fun WrapWordsRow(
-    words: List<String>,
-    isRevealed: Boolean,
-    revealedIndices: Set<Int> = emptySet(),
-    onWordClick: (Int) -> Unit,
-    onWordLongClick: (String) -> Unit
-) {
-    // Pre-calculate which words are revealed
-    val wordStates = words.mapIndexed { index, word ->
-        val cleanWord = word.replace(Regex("[^\\w']"), "")
-        if (cleanWord.isEmpty()) null else {
-            val revealed = isRevealed || revealedIndices.contains(index)
-            Triple(cleanWord, revealed, index)
-        }
-    }.filterNotNull()
-
-    // Use BoxWithConstraints to get available width
-    BoxWithConstraints(
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        val maxWidth = maxWidth.value.toInt()
-
-        // Build rows of word states (as data, not UI)
-        val rows = mutableListOf<List<Triple<String, Boolean, Int>>>()
-        var currentRow = mutableListOf<Triple<String, Boolean, Int>>()
-        var currentRowWidth = 0
-        val spacing = 2 // dp between words
-        val availableWidth = maxWidth - 8 // account for row padding
-
-        wordStates.forEach { (word, revealed, idx) ->
-            // Estimate width more conservatively
-            val estimatedWidth = word.length * 7 + 20
-
-            // If single word is wider than available, it goes on its own line
-            if (estimatedWidth > availableWidth) {
-                if (currentRow.isNotEmpty()) {
-                    rows.add(currentRow.toList())
-                    currentRow.clear()
-                    currentRowWidth = 0
-                }
-                rows.add(listOf(Triple(word, revealed, idx)))
-            } else if (currentRowWidth + estimatedWidth > availableWidth && currentRow.isNotEmpty()) {
-                rows.add(currentRow.toList())
-                currentRow.clear()
-                currentRowWidth = 0
-                currentRow.add(Triple(word, revealed, idx))
-                currentRowWidth = estimatedWidth + spacing
-            } else {
-                currentRow.add(Triple(word, revealed, idx))
-                currentRowWidth += estimatedWidth + spacing
-            }
-        }
-        if (currentRow.isNotEmpty()) {
-            rows.add(currentRow.toList())
-        }
-
-        // Now render the rows as UI
-        Column(
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            rows.forEach { row ->
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    row.forEach { (word, revealed, idx) ->
-                        WordChipItem(
-                            word = word,
-                            isRevealed = revealed,
-                            onClick = { onWordClick(idx) },
-                            onLongClick = { onWordLongClick(word) }
-                        )
-                    }
+            // Page content
+            Box(modifier = Modifier.weight(1f)) {
+                when (currentPage) {
+                    PracticeViewModel.PracticePage.LISTENING -> ListeningPage(
+                        viewModel = viewModel,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    PracticeViewModel.PracticePage.SPEAKING -> SpeakingPage(
+                        viewModel = viewModel,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    PracticeViewModel.PracticePage.TESTING -> TestingPage(
+                        viewModel = viewModel,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
             }
-        }
-    }
-}
 
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun WordChipItem(
-    word: String,
-    isRevealed: Boolean,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit
-) {
-    val wordStyle = TextStyle(
-        fontFamily = FontFamily(Font(R.font.aptos, FontWeight.Medium)),
-        fontWeight = FontWeight.Medium,
-        fontSize = 14.sp
-    )
-
-    if (isRevealed) {
-        // No background when revealed
-        Text(
-            text = word,
-            style = wordStyle,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier
-                .padding(horizontal = 2.dp, vertical = 2.dp)
-                .combinedClickable(
-                    onClick = onClick,
-                    onLongClick = onLongClick
-                )
-        )
-    } else {
-        // Gray background box when hidden, same size as word
-        Surface(
-            modifier = Modifier
-                .combinedClickable(
-                    onClick = onClick,
-                    onLongClick = onLongClick
-                ),
-            shape = RoundedCornerShape(2.dp),
-            color = Color(0xFFE0E0E0)
-        ) {
-            Text(
-                text = word,
-                style = wordStyle,
-                color = Color.Transparent,
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-            )
+            // Shared Playback Controls Bar (hidden for all pages - each page has its own controls)
+            // PlaybackControlsBar is now only used within individual pages if needed
         }
     }
 }
@@ -654,9 +200,9 @@ private fun PlaybackControlsBar(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 2.dp)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
     ) {
-        // Progress bar - compact height
+        // Progress bar
         var sliderPosition by remember(currentPosition) { mutableFloatStateOf(currentPosition.toFloat()) }
         var isDragging by remember { mutableStateOf(false) }
 
@@ -686,20 +232,18 @@ private fun PlaybackControlsBar(
             }
         }
 
-        // Time and controls row - compact
+        // Time and controls row
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Time - smaller text
             Text(
                 text = formatTime(currentPosition),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            // Controls - smaller buttons
             Row(
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -738,7 +282,7 @@ private fun PlaybackControlsBar(
                     modifier = Modifier.size(36.dp)
                 ) {
                     Surface(
-                        shape = CircleShape,
+                        shape = androidx.compose.foundation.shape.CircleShape,
                         color = MaterialTheme.colorScheme.primary
                     ) {
                         Icon(
@@ -795,7 +339,6 @@ private fun PlaybackControlsBar(
                 }
             }
 
-            // Duration - smaller text
             Text(
                 text = formatTime(duration),
                 style = MaterialTheme.typography.labelSmall,
@@ -805,177 +348,147 @@ private fun PlaybackControlsBar(
     }
 }
 
+private fun formatTime(ms: Long): String {
+    val totalSeconds = ms / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return "%02d:%02d".format(minutes, seconds)
+}
+
 @Composable
-private fun RecordingSection(
-    recordingState: RecordingState,
-    recordingPath: String?,
-    isPlayingRecording: Boolean,
-    onStartRecording: () -> Unit,
-    onStopRecording: () -> Unit,
-    onPlayRecording: () -> Unit,
-    onStopPlayingRecording: () -> Unit
+internal fun VideoPlayerSection(
+    exoPlayer: ExoPlayer,
+    modifier: Modifier = Modifier
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        ),
-        shape = RoundedCornerShape(16.dp)
+    Box(
+        modifier = modifier
+            .background(Color.Black)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            // Record button
-            val buttonScale by animateFloatAsState(
-                targetValue = if (recordingState == RecordingState.RECORDING) 1.1f else 1f,
-                animationSpec = spring(stiffness = Spring.StiffnessLow),
-                label = "record_btn_scale"
-            )
-
-            IconButton(
-                onClick = {
-                    if (recordingState == RecordingState.RECORDING) {
-                        onStopRecording()
-                    } else {
-                        onStartRecording()
-                    }
-                },
-                modifier = Modifier
-                    .size(56.dp)
-                    .graphicsLayer {
-                        scaleX = buttonScale
-                        scaleY = buttonScale
-                    }
-            ) {
-                Surface(
-                    shape = CircleShape,
-                    color = if (recordingState == RecordingState.RECORDING)
-                        Color.Red
-                    else
-                        MaterialTheme.colorScheme.primary
-                ) {
-                    Box(
-                        modifier = Modifier.size(56.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = if (recordingState == RecordingState.RECORDING)
-                                Icons.Default.Stop
-                            else
-                                Icons.Default.Mic,
-                            contentDescription = "录音",
-                            tint = Color.White,
-                            modifier = Modifier.size(28.dp)
-                        )
-                    }
+        AndroidView(
+            factory = { context ->
+                PlayerView(context).apply {
+                    player = exoPlayer
+                    useController = false
                 }
-            }
-
-            // Status text
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = when (recordingState) {
-                        RecordingState.IDLE -> "跟读练习"
-                        RecordingState.RECORDING -> "录音中..."
-                        RecordingState.STOPPED -> "录音已保存"
-                        else -> ""
-                    },
-                    style = MaterialTheme.typography.titleSmall,
-                    color = if (recordingState == RecordingState.RECORDING)
-                        Color.Red
-                    else
-                        MaterialTheme.colorScheme.onSurface
-                )
-                if (recordingState == RecordingState.IDLE) {
-                    Text(
-                        text = "点击录制你的声音",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            // Play recording button
-            if (recordingPath != null && recordingState != RecordingState.RECORDING) {
-                IconButton(
-                    onClick = if (isPlayingRecording) onStopPlayingRecording else onPlayRecording,
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = if (isPlayingRecording)
-                            MaterialTheme.colorScheme.primary
-                        else
-                            MaterialTheme.colorScheme.secondaryContainer
-                    ) {
-                        Icon(
-                            imageVector = if (isPlayingRecording) Icons.Default.Stop else Icons.Default.PlayArrow,
-                            contentDescription = if (isPlayingRecording) "停止" else "播放录音",
-                            modifier = Modifier.size(24.dp),
-                            tint = if (isPlayingRecording)
-                                Color.White
-                            else
-                                MaterialTheme.colorScheme.onSecondaryContainer
-                        )
-                    }
-                }
-            }
-        }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
     }
 }
 
 @Composable
-private fun WordSaveDialog(
-    word: String,
+internal fun WordSaveDialog(
+    initialWord: String,
+    translationState: WordTranslationState,
     onDismiss: () -> Unit,
-    onSave: (String) -> Unit
+    onSave: (word: String, translation: String, phonetic: String, pos: String) -> Unit,
+    onRetranslate: (word: String) -> Unit,
 ) {
-    var translation by remember { mutableStateOf("") }
+    // Word is editable so the user can correct inflected forms (plurals,
+    // past tense, future "will X", etc.) into the dictionary's base
+    // form and re-look up. The `remember(initialWord)` key resets the
+    // field when a different long-press opens a fresh dialog.
+    var currentWord by remember(initialWord) { mutableStateOf(initialWord) }
+    // Local editable translation. We seed it from the Loaded result
+    // when it arrives, but the user can still tweak it before saving.
+    var translation by remember(initialWord) { mutableStateOf("") }
+    LaunchedEffect(translationState) {
+        if (translationState is WordTranslationState.Loaded) {
+            translation = translationState.translation
+        }
+    }
+
+    val isLoading = translationState is WordTranslationState.Loading
+    val errorMessage = (translationState as? WordTranslationState.Failed)?.message
+    // Phonetic + POS come from the local-dictionary hit. Practice
+    // flow is local-only; phonetic/pos are non-null on `Loaded`.
+    val loaded = translationState as? WordTranslationState.Loaded
+    val phonetic = loaded?.phonetic.orEmpty()
+    val pos = loaded?.pos.orEmpty()
+    val canSave = !isLoading &&
+        currentWord.isNotBlank() &&
+        translation.isNotBlank()
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "保存单词",
-                style = MaterialTheme.typography.headlineSmall
+                text = "翻译 & 保存",
+                style = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp)
             )
         },
         text = {
             Column {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.fillMaxWidth()
+                // Editable word field + "翻译" button. The button
+                // re-runs the local dictionary lookup on whatever the
+                // user has typed — so they can change "went" → "go",
+                // "children" → "child", "will become" → "become", etc.
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    OutlinedTextField(
+                        value = currentWord,
+                        onValueChange = { currentWord = it },
+                        label = { Text("单词") },
+                        singleLine = true,
+                        enabled = !isLoading,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    TextButton(
+                        onClick = { onRetranslate(currentWord.trim()) },
+                        enabled = currentWord.isNotBlank() && !isLoading,
+                    ) {
+                        Text("翻译")
+                    }
+                }
+                if (phonetic.isNotBlank()) {
                     Text(
-                        text = word,
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(16.dp),
-                        fontWeight = FontWeight.Bold
+                        text = phonetic,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp, start = 4.dp),
                     )
                 }
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(16.dp))
                 OutlinedTextField(
                     value = translation,
                     onValueChange = { translation = it },
-                    label = { Text("翻译") },
+                    label = { Text(if (pos.isNotBlank()) "$pos 翻译" else "翻译") },
+                    placeholder = {
+                        Text(
+                            if (isLoading) "正在查询本地词典..."
+                            else "可编辑后再保存"
+                        )
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(12.dp),
+                    enabled = !isLoading,
+                    trailingIcon = {
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        }
+                    },
                 )
+                if (errorMessage != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = errorMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
         },
         confirmButton = {
             Button(
-                onClick = { onSave(translation) },
-                enabled = translation.isNotBlank(),
+                onClick = { onSave(currentWord.trim(), translation, phonetic, pos) },
+                enabled = canSave,
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Text("保存")
@@ -988,32 +501,4 @@ private fun WordSaveDialog(
         },
         shape = RoundedCornerShape(24.dp)
     )
-}
-
-@Composable
-private fun VideoPlayerSection(
-    exoPlayer: ExoPlayer,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier
-            .background(Color.Black)
-    ) {
-        AndroidView(
-            factory = { context ->
-                PlayerView(context).apply {
-                    player = exoPlayer
-                    useController = false // We use our own controls
-                }
-            },
-            modifier = Modifier.fillMaxSize()
-        )
-    }
-}
-
-private fun formatTime(ms: Long): String {
-    val totalSeconds = ms / 1000
-    val minutes = totalSeconds / 60
-    val seconds = totalSeconds % 60
-    return "%02d:%02d".format(minutes, seconds)
 }

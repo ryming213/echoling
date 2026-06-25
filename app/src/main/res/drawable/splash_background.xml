@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Window background for the launcher activity's splash theme. Painted by
+  the system BEFORE Compose has a chance to draw, so it determines what
+  the user sees during the few hundred milliseconds between Activity
+  creation and the first Compose frame.
+
+  Layer-list:
+    - solid light-blue (matches the splash image's gradient base color,
+      so any letterboxing reveals the same tone as the image itself,
+      blending seamlessly)
+    - splash_image.png centered at its natural 1080×1920 pixel size.
+      `gravity="center"` is critical: the previous `gravity="fill"`
+      forced the bitmap to stretch to the full window in both axes,
+      which squashed the figure vertically and stretched the caption
+      horizontally. With `center` the image keeps its aspect ratio;
+      the underlying solid color fills whatever margin the phone's
+      aspect ratio leaves (≈0px on 9:16 phones, up to ≈240px top+bottom
+      on 9:20 phones). The splash illustration already has this same
+      light blue as its background, so the letterbox bands are visually
+      indistinguishable from the image.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/splash_background" />
+    <item
+        android:drawable="@drawable/splash_image"
+        android:gravity="center" />
+</layer-list>

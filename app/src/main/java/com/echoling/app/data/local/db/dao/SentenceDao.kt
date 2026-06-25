@@ -18,9 +18,19 @@ interface SentenceDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSentences(sentences: List<SentenceEntity>)
 
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertSentencesIfNotExists(sentences: List<SentenceEntity>)
+
     @Update
     suspend fun updateSentence(sentence: SentenceEntity)
 
     @Query("DELETE FROM sentences WHERE courseId = :courseId")
     suspend fun deleteSentencesByCourseId(courseId: String)
-}
+
+    @Query("UPDATE sentences SET isCompleted = :isCompleted WHERE courseId = :courseId AND sentenceId = :sentenceId")
+    suspend fun updateCompletedStatus(courseId: String, sentenceId: Int, isCompleted: Boolean)
+
+    @Query("UPDATE sentences SET isTested = :isTested WHERE courseId = :courseId AND sentenceId = :sentenceId")
+    suspend fun updateTestedStatus(courseId: String, sentenceId: Int, isTested: Boolean)
+
+    }
