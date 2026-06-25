@@ -10,7 +10,6 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.echoling.app.domain.model.Course
 import com.echoling.app.domain.model.LearningProgress
-import com.echoling.app.domain.model.ScoreResult
 import com.echoling.app.domain.model.Sentence
 import com.echoling.app.domain.model.Word
 import com.echoling.app.domain.usecase.GetCourseDetailUseCase
@@ -20,7 +19,6 @@ import com.echoling.app.domain.usecase.SaveProgressUseCase
 import com.echoling.app.domain.usecase.SaveWordUseCase
 import com.echoling.app.domain.usecase.SyncSentencesUseCase
 import com.echoling.app.domain.usecase.UpdateSentenceCompletedUseCase
-import com.echoling.app.domain.usecase.UpdateSentenceReadScoreUseCase
 import com.echoling.app.domain.usecase.UpdateSentenceTestedUseCase
 import com.echoling.app.player.AudioPlayer
 import com.echoling.app.player.PlaybackState
@@ -29,8 +27,9 @@ import com.echoling.app.player.subtitle.SubtitleMode
 import com.echoling.app.player.subtitle.SubtitleParserFactory
 import com.echoling.app.speech.RecordingResult
 import com.echoling.app.speech.RecordingState
+import com.echoling.app.speech.SttRecognizer
 import com.echoling.app.speech.VoiceRecorder
-import com.echoling.app.speech.PronunciationGrader
+import com.echoling.app.speech.WordMatcher
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -81,21 +80,22 @@ sealed class WordTranslationState {
 }
 
 /**
- * Pronunciation-grading state for the test page's "score this sentence" flow.
- * The state machine is:
- *   Idle → Recording → Loading → (Success | Error)
- *   Success / Error → Recording (user retries) or Idle (cancel)
+ * Testing-tab STT state machine.
+ * Idle → Listening → Transcribed → (Passed | Failed).
+ * User can cancel from Listening back to Idle, or reset from any state.
  */
-sealed class GradeState {
-    data object Idle : GradeState()
-    data object Recording : GradeState()  // user is currently recording their voice
-    data object Loading : GradeState()    // recording stopped, grading in progress
-    data class Success(
-        val result: ScoreResult,
-        val sentenceId: Int,
-        val recordingPath: String,
-    ) : GradeState()
-    data class Error(val message: String) : GradeState()
+sealed class SttTestState {
+    data object Idle : SttTestState()
+    data class Listening(val elapsedMs: Long = 0L) : SttTestState()
+    data class Transcribed(val text: String) : SttTestState()
+    data class Passed(val text: String) : SttTestState()
+    data class Failed(
+        val transcribed: String,
+        val original: String,
+        val origWords: List<String>,
+        val transWords: List<String>,
+        val reason: String
+    ) : SttTestState()
 }
 
 @HiltViewModel
@@ -112,8 +112,7 @@ class PracticeViewModel @Inject constructor(
     private val subtitleParserFactory: SubtitleParserFactory,
     private val voiceRecorder: VoiceRecorder,
     private val lookupWordUseCase: LookupWordUseCase,
-    private val pronunciationGrader: PronunciationGrader,
-    private val updateSentenceReadScoreUseCase: UpdateSentenceReadScoreUseCase,
+    private val sttRecognizer: SttRecognizer,
 ) : AndroidViewModel(application) {
 
     val playbackState = audioPlayer.playbackState
@@ -208,14 +207,17 @@ class PracticeViewModel @Inject constructor(
 
     private var wordTranslationJob: Job? = null
 
-    // ─── Pronunciation grading state (跟读评分) ────────────────────
-    // Phases: Idle → Recording → Loading → (Success | Error).
-    // The UI owns permission — we only switch state in response to
-    // startRecordingForGrading() / stopAndGrade() / cancelGrading().
-    private val _gradeState = MutableStateFlow<GradeState>(GradeState.Idle)
-    val gradeState: StateFlow<GradeState> = _gradeState.asStateFlow()
+    // ─── STT word-match testing state (跟读测试) ──────────────────────
+    // Phases: Idle → Listening → Transcribed → (Passed | Failed).
+    private val _sttTestState = MutableStateFlow<SttTestState>(SttTestState.Idle)
+    val sttTestState: StateFlow<SttTestState> = _sttTestState.asStateFlow()
 
-    private var gradeJob: Job? = null
+    // 5 random amplitude bars for v1 recording overlay animation.
+    private val _sttAmplitudeBars = MutableStateFlow(List(5) { 0.4f })
+    val sttAmplitudeBars: StateFlow<List<Float>> = _sttAmplitudeBars.asStateFlow()
+
+    private var sttElapsedJob: Job? = null
+    private var sttEventCollectionJob: Job? = null
 
     fun setCurrentPage(page: PracticePage) {
         _currentPage.value = page
@@ -854,133 +856,105 @@ class PracticeViewModel @Inject constructor(
         voiceRecorder.cancelRecording()
     }
 
-    // ─── Pronunciation grading (跟读评分) ────────────────────────────
+    // ─── STT word-match testing ────────────────────────────────────
 
-    /**
-     * Start recording the user's voice for pronunciation scoring.
-     * Safe to call repeatedly — if a previous recording is in progress it
-     * will be cancelled first.
-     *
-     * UI flow: the caller is expected to have already verified / requested
-     * RECORD_AUDIO permission. We don't check permission here because the
-     * caller (Composable) holds the launcher.
-     */
-    fun startRecordingForGrading() {
-        stopPlayingRecording()
-        cancelGradingInternal()  // reset any in-flight grading state
-        val started = startRecording()
-        if (started) {
-            _gradeState.value = GradeState.Recording
-        } else {
-            _gradeState.value = GradeState.Error("录音启动失败")
+    /** Start STT. Called by UI onPress of mic button. */
+    fun startStt() {
+        if (_sttTestState.value is SttTestState.Listening) return
+        if (!sttRecognizer.isAvailable()) {
+            _sttTestState.value = SttTestState.Transcribed("")
+            _sttAmplitudeBars.value = List(5) { 0.4f }
+            return
         }
+        _sttTestState.value = SttTestState.Listening(0L)
+        sttEventCollectionJob = viewModelScope.launch {
+            sttRecognizer.events.collect { event ->
+                when (event) {
+                    is SttRecognizer.SttEvent.Results -> onSttResults(event.text)
+                    is SttRecognizer.SttEvent.Error -> onSttResults("")
+                    is SttRecognizer.SttEvent.PartialResults -> { /* v1 ignore */ }
+                }
+            }
+        }
+        sttRecognizer.start(language = "en-US")
+        startSttTimers()
     }
 
-    /**
-     * Stop the current recording and trigger pronunciation grading.
-     * No-op if not currently recording.
-     *
-     * **Defensive**: the entire grading coroutine is wrapped in a
-     * try/catch + CoroutineExceptionHandler. PronunciationGrader
-     * returns Result.failure for known error paths (TTS failed, decode
-     * failed, etc.), but if anything inside the grading pipeline
-     * throws an unexpected exception (e.g. an uncaught NPE in a
-     * third-party TTS engine), we convert it to GradeState.Error
-     * instead of letting it bubble to Thread.UncaughtExceptionHandler
-     * and crash the process.
-     */
-    fun stopAndGrade() {
-        val recordingState = _gradeState.value
-        if (recordingState != GradeState.Recording) {
-            android.util.Log.w("PracticeViewModel", "stopAndGrade called but not recording (state=$recordingState)")
-            return
-        }
-        val result = stopRecording()
-        if (result == null || result.filePath.isBlank()) {
-            _gradeState.value = GradeState.Error("录音失败")
-            return
-        }
-        val sentence = currentGradingSentence()
-        if (sentence == null) {
-            _gradeState.value = GradeState.Error("找不到当前测试句子")
-            return
-        }
-        _gradeState.value = GradeState.Loading
-        gradeJob?.cancel()
-        val safeExceptionHandler = kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
-            android.util.Log.e("PracticeViewModel", "Unhandled exception during grading — converting to Error state", e)
-            _gradeState.value = GradeState.Error("评分异常：${e.javaClass.simpleName} - ${e.message ?: "(no message)"}")
-        }
-        gradeJob = viewModelScope.launch(safeExceptionHandler) {
-            try {
-                pronunciationGrader.grade(sentence, result.filePath)
-                    .onSuccess { scoreResult ->
-                        _gradeState.value = GradeState.Success(
-                            result = scoreResult,
-                            sentenceId = sentence.sentenceId,
-                            recordingPath = result.filePath,
-                        )
-                        // Persist the score to DB
-                        runCatching {
-                            updateSentenceReadScoreUseCase(
-                                courseId = currentCourseId,
-                                sentenceId = sentence.sentenceId,
-                                score = scoreResult.total,
-                            )
-                        }.onFailure {
-                            android.util.Log.w("PracticeViewModel", "Failed to persist readScore", it)
-                        }
-                    }
-                    .onFailure { e ->
-                        _gradeState.value = GradeState.Error("评分失败：${e.javaClass.simpleName} - ${e.message ?: e.javaClass.simpleName}")
-                    }
-            } catch (e: Throwable) {
-                // Last-ditch catch: any exception that escaped
-                // PronunciationGrader.grade() (which is supposed to
-                // return Result.failure, never throw) becomes an Error
-                // state instead of crashing the process.
-                android.util.Log.e("PracticeViewModel", "Caught exception escaping PronunciationGrader.grade()", e)
-                _gradeState.value = GradeState.Error("评分异常：${e.javaClass.simpleName} - ${e.message ?: "(no message)"}")
+    /** Stop STT. Called by UI onRelease of mic button. */
+    fun stopStt() {
+        if (_sttTestState.value !is SttTestState.Listening) return
+        sttRecognizer.stop()
+        stopSttTimers()
+    }
+
+    private fun onSttResults(text: String) {
+        stopSttTimers()
+        _sttTestState.value = SttTestState.Transcribed(text)
+    }
+
+    private fun startSttTimers() {
+        val startTime = System.currentTimeMillis()
+        sttElapsedJob = viewModelScope.launch {
+            while (isActive && _sttTestState.value is SttTestState.Listening) {
+                val elapsed = System.currentTimeMillis() - startTime
+                (_sttTestState.value as? SttTestState.Listening)?.let {
+                    _sttTestState.value = it.copy(elapsedMs = elapsed)
+                }
+                _sttAmplitudeBars.value = List(5) { (Math.random().toFloat() * 0.7f + 0.3f) }
+                delay(100)
             }
         }
     }
 
-    /**
-     * Cancel any in-flight grading and reset to Idle. Safe to call at any
-     * time. If the user was mid-recording, cancels the recording too.
-     */
-    fun cancelGrading() {
-        cancelGradingInternal()
+    private fun stopSttTimers() {
+        sttElapsedJob?.cancel()
+        sttElapsedJob = null
+        sttEventCollectionJob?.cancel()
+        sttEventCollectionJob = null
     }
 
-    private fun cancelGradingInternal() {
-        gradeJob?.cancel()
-        gradeJob = null
-        if (_gradeState.value is GradeState.Recording) {
-            cancelRecording()
+    /** Cancel STT (user taps "取消" in overlay). */
+    fun cancelStt() {
+        if (_sttTestState.value is SttTestState.Listening) {
+            sttRecognizer.stop()
         }
-        stopPlayingRecording()
-        _gradeState.value = GradeState.Idle
+        stopSttTimers()
+        _sttTestState.value = SttTestState.Idle
+        _sttAmplitudeBars.value = List(5) { 0.4f }
     }
 
-    /**
-     * Helper: get the Sentence domain object for the current test item.
-     * The test item is a Subtitle (player layer); we need a Sentence to
-     * pass to PronunciationGrader. We have startTimeMs / endTimeMs / index
-     * / contentEn on the Subtitle, so we can construct a minimal Sentence
-     * here. We use currentCourseId for the courseId.
-     */
-    private fun currentGradingSentence(): Sentence? {
-        val testState = _testState.value
-        val sub = testState.testItems.getOrNull(testState.currentTestIndex) ?: return null
-        return Sentence(
-            courseId = currentCourseId,
-            sentenceId = sub.index,
-            contentEn = sub.contentEn,
-            contentCn = sub.contentCn,
-            startTimeMs = sub.startTimeMs,
-            endTimeMs = sub.endTimeMs,
-        )
+    /** User submitted the transcription for matching. */
+    fun submitTranscription(text: String) {
+        val currentTest = _testState.value.testItems.getOrNull(_testState.value.currentTestIndex)
+            ?: run {
+                _sttTestState.value = SttTestState.Failed(
+                    transcribed = text,
+                    original = "",
+                    origWords = emptyList(),
+                    transWords = emptyList(),
+                    reason = "no_test_item"
+                )
+                return
+            }
+        val result = WordMatcher.match(currentTest.contentEn, text)
+        if (result.passed) {
+            _sttTestState.value = SttTestState.Passed(text)
+            markSentenceTested(currentTest.index, true)
+        } else {
+            _sttTestState.value = SttTestState.Failed(
+                transcribed = text,
+                original = currentTest.contentEn,
+                origWords = result.origWords,
+                transWords = result.transWords,
+                reason = result.reason
+            )
+        }
+    }
+
+    /** Reset to Idle for next attempt. */
+    fun resetStt() {
+        _sttTestState.value = SttTestState.Idle
+        _sttAmplitudeBars.value = List(5) { 0.4f }
     }
 
     fun playRecording() {
@@ -1056,6 +1030,9 @@ class PracticeViewModel @Inject constructor(
         videoPlayer?.release()
         voiceRecorder.release()
         stopPlayingRecording()
+        sttRecognizer.stop()
+        sttElapsedJob?.cancel()
+        sttEventCollectionJob?.cancel()
         saveProgress()
     }
 }
