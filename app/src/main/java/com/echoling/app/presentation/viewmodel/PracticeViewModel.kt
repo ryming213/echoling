@@ -160,6 +160,15 @@ class PracticeViewModel @Inject constructor(
     private companion object {
         /** Auto-save cadence while Practice is open. */
         const val PERIODIC_SAVE_INTERVAL_MS: Long = 10_000L
+
+        /**
+         * Minimum press-and-hold duration to start STT, in milliseconds.
+         * Below this, we treat the press as accidental and return to Idle
+         * without invoking the recognizer — Android's SpeechRecognizer needs
+         * ~300ms to initialize, and stopping it before that fires
+         * ERROR_NO_MATCH which the user perceives as a broken button.
+         */
+        const val STT_MIN_HOLD_MS: Long = 300L
     }
 
     // For playing single subtitle once
@@ -218,6 +227,7 @@ class PracticeViewModel @Inject constructor(
 
     private var sttElapsedJob: Job? = null
     private var sttEventCollectionJob: Job? = null
+    private var sttPressStartTimeMs: Long = 0L
 
     fun setCurrentPage(page: PracticePage) {
         _currentPage.value = page
@@ -861,6 +871,10 @@ class PracticeViewModel @Inject constructor(
     /** Start STT. Called by UI onPress of mic button. */
     fun startStt() {
         if (_sttTestState.value is SttTestState.Listening) return
+        sttPressStartTimeMs = System.currentTimeMillis()
+        // Cancel any stale event collection job from a previous session
+        // so we don't double-handle this session's events.
+        cancelSttEventCollection()
         if (!sttRecognizer.isAvailable()) {
             _sttTestState.value = SttTestState.Transcribed("")
             _sttAmplitudeBars.value = List(5) { 0.4f }
@@ -883,12 +897,30 @@ class PracticeViewModel @Inject constructor(
     /** Stop STT. Called by UI onRelease of mic button. */
     fun stopStt() {
         if (_sttTestState.value !is SttTestState.Listening) return
+        val holdMs = System.currentTimeMillis() - sttPressStartTimeMs
+        if (holdMs < STT_MIN_HOLD_MS) {
+            // Treat as accidental press: skip STT, return to Idle without
+            // finalizing. The recognizer may have been started already
+            // (since STT_MIN_HOLD_MS is short) — stop() it cleanly so
+            // we don't leak an active recognizer.
+            sttRecognizer.stop()
+            stopSttElapsedTimer()
+            cancelSttEventCollection()
+            _sttTestState.value = SttTestState.Idle
+            _sttAmplitudeBars.value = List(5) { 0.4f }
+            return
+        }
+        // Normal release: signal end-of-input and wait for the result.
+        // We deliberately do NOT cancel the event collection job here —
+        // it must stay alive to receive the onResults/onError callback
+        // that stopListening() triggers asynchronously.
         sttRecognizer.stop()
-        stopSttTimers()
+        stopSttElapsedTimer()
     }
 
     private fun onSttResults(text: String) {
-        stopSttTimers()
+        stopSttElapsedTimer()
+        cancelSttEventCollection()
         _sttTestState.value = SttTestState.Transcribed(text)
     }
 
@@ -906,9 +938,19 @@ class PracticeViewModel @Inject constructor(
         }
     }
 
-    private fun stopSttTimers() {
+    /**
+     * Cancel only the elapsed-time ticker. The event collection job
+     * stays alive — we still need to receive the final onResults/
+     * onError from SpeechRecognizer after stopListening() is called.
+     * The event collection job is cancelled in onSttResults() (when
+     * we get the result) or cancelStt() (when the user aborts).
+     */
+    private fun stopSttElapsedTimer() {
         sttElapsedJob?.cancel()
         sttElapsedJob = null
+    }
+
+    private fun cancelSttEventCollection() {
         sttEventCollectionJob?.cancel()
         sttEventCollectionJob = null
     }
@@ -918,7 +960,8 @@ class PracticeViewModel @Inject constructor(
         if (_sttTestState.value is SttTestState.Listening) {
             sttRecognizer.stop()
         }
-        stopSttTimers()
+        stopSttElapsedTimer()
+        cancelSttEventCollection()
         _sttTestState.value = SttTestState.Idle
         _sttAmplitudeBars.value = List(5) { 0.4f }
     }
