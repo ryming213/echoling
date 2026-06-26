@@ -1,5 +1,10 @@
 package com.echoling.app.presentation.ui.screens.practice
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -12,7 +17,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
@@ -475,38 +482,15 @@ private fun TestingControlBar(
             }
 
             // 3. Microphone (press and hold to record, release to stop)
-            Box(
-                modifier = Modifier
-                    .size(54.dp)
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onPress = {
-                                onPressMic()
-                                tryAwaitRelease()
-                                onReleaseMic()
-                            }
-                        )
-                    }
-            ) {
-                Surface(
-                    shape = CircleShape,
-                    color = if (isSttListening) MaterialTheme.colorScheme.error
-                            else MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    Icon(
-                        Icons.Default.Mic,
-                        contentDescription = if (isSttListening) "正在录音，松开结束" else "按住录音",
-                        modifier = Modifier
-                            .size(26.dp)
-                            .align(Alignment.Center),
-                        tint = if (isSttListening)
-                            MaterialTheme.colorScheme.onError
-                        else
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                }
-            }
+            // Visual feedback: button scales up + 3 concentric ripple rings expand
+            // outward (like a speaker broadcasting) when held. The pointerInput
+            // stays on the OUTER box so the press area is the full ripple zone,
+            // not just the inner button.
+            ListeningMicButton(
+                isListening = isSttListening,
+                onPress = onPressMic,
+                onRelease = onReleaseMic,
+            )
 
             // 4. Mark tested / Next
             IconButton(onClick = onMarkTested) {
@@ -531,4 +515,95 @@ private fun TestingControlBar(
             }
         }
     }
+}
+
+/**
+ * Press-and-hold mic button. When [isListening] is true:
+ * - 3 concentric ripple rings expand outward from the button (staggered 600ms)
+ * - The button itself scales up 1.15x
+ * - The button turns red (error color)
+ *
+ * The pointerInput sits on the outer 140dp Box so the press target
+ * stays generous even though the button visually appears at 54dp.
+ */
+@Composable
+private fun ListeningMicButton(
+    isListening: Boolean,
+    onPress: () -> Unit,
+    onRelease: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(140.dp)
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onPress = {
+                        onPress()
+                        tryAwaitRelease()
+                        onRelease()
+                    }
+                )
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        // Ripple rings — only when listening. No parent .clip() so
+        // they can extend beyond the 140dp box bounds.
+        if (isListening) {
+            repeat(3) { index ->
+                MicRippleRing(delayMs = index * 600L)
+            }
+        }
+        // The actual mic button (scales up when listening)
+        Surface(
+            shape = CircleShape,
+            color = if (isListening) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.primaryContainer,
+            modifier = Modifier
+                .size(54.dp)
+                .scale(if (isListening) 1.15f else 1f),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Default.Mic,
+                    contentDescription = if (isListening) "正在录音，松开结束" else "按住录音",
+                    modifier = Modifier.size(26.dp),
+                    tint = if (isListening)
+                        MaterialTheme.colorScheme.onError
+                    else
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MicRippleRing(delayMs: Long) {
+    val transition = rememberInfiniteTransition(label = "ripple_$delayMs")
+    val scale by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 2.4f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1800, delayMillis = delayMs.toInt()),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "ripple_scale_$delayMs"
+    )
+    val alpha by transition.animateFloat(
+        initialValue = 0.45f,
+        targetValue = 0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1800, delayMillis = delayMs.toInt()),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "ripple_alpha_$delayMs"
+    )
+    Box(
+        modifier = Modifier
+            .size(54.dp)
+            .scale(scale)
+            .alpha(alpha)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.error.copy(alpha = 0.4f))
+    )
 }
