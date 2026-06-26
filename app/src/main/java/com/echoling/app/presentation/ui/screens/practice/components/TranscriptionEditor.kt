@@ -45,6 +45,14 @@ fun TranscriptionEditor(
                     .heightIn(min = 96.dp),
                 minLines = 3
             )
+            Spacer(Modifier.height(4.dp))
+            if (text.isBlank()) {
+                Text(
+                    "未识别到语音，请重录或手动输入",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             Spacer(Modifier.height(12.dp))
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
