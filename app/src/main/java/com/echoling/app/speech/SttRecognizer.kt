@@ -48,7 +48,11 @@ class SttRecognizer @Inject constructor(
     fun isAvailable(): Boolean = SpeechRecognizer.isRecognitionAvailable(context)
 
     fun start(language: String = "en-US") {
-        if (recognizer != null) stop()
+        // Abandon any previous recognizer — we're starting a fresh session
+        // and don't need its result. Don't call stop() here because that
+        // would emit a final Results event for a session the caller has
+        // already given up on.
+        teardown()
         recognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -73,6 +77,7 @@ class SttRecognizer @Inject constructor(
                 override fun onError(error: Int) {
                     Log.w(TAG, "onError: $error")
                     _events.tryEmit(SttEvent.Error(error, "SpeechRecognizer error code: $error"))
+                    teardown()
                 }
                 override fun onResults(results: Bundle?) {
                     val text = results
@@ -81,6 +86,8 @@ class SttRecognizer @Inject constructor(
                         .orEmpty()
                     Log.d(TAG, "onResults: '$text'")
                     _events.tryEmit(SttEvent.Results(text))
+                    teardown()  // emit first, then destroy — so a collector that's
+                                // still attached can process the event before teardown
                 }
                 override fun onPartialResults(partial: Bundle?) {
                     // v1: ignore partial results
@@ -91,12 +98,38 @@ class SttRecognizer @Inject constructor(
         }
     }
 
+    /**
+     * Signal end-of-input to the active recognizer. The recognizer will
+     * finalize asynchronously and fire either [RecognitionListener.onResults]
+     * or [RecognitionListener.onError]; both callbacks call [teardown]
+     * which actually destroys the recognizer.
+     *
+     * Do NOT call [SpeechRecognizer.destroy] here — doing so synchronously
+     * cancels pending callbacks and the result is lost. The previous
+     * recognizer is also abandoned (left for GC) in that case, since the
+     * caller is choosing to discard it.
+     */
     fun stop() {
         try {
             recognizer?.stopListening()
         } catch (e: Throwable) {
             Log.w(TAG, "stopListening threw", e)
+            // If stopListening itself throws, we still need to release
+            // the recognizer and surface an error so the UI can recover.
+            _events.tryEmit(
+                SttEvent.Error(SpeechRecognizer.ERROR_CLIENT, "stopListening failed: ${e.message}")
+            )
+            teardown()
         }
+    }
+
+    /**
+     * Destroy the recognizer and clear the reference. Safe to call
+     * multiple times. Called from the result/error callbacks after the
+     * event has been emitted, and from [start] when abandoning a stale
+     * recognizer.
+     */
+    private fun teardown() {
         try {
             recognizer?.destroy()
         } catch (e: Throwable) {
