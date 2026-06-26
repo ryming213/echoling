@@ -229,6 +229,11 @@ class PracticeViewModel @Inject constructor(
     private var sttEventCollectionJob: Job? = null
     private var sttPressStartTimeMs: Long = 0L
 
+    // Tracks whether the current Listening session has an active
+    // SpeechRecognizer. False means isAvailable() returned false and the
+    // recognizer was never created, so we can't expect any callbacks.
+    private var sttRecognizerStarted: Boolean = false
+
     fun setCurrentPage(page: PracticePage) {
         _currentPage.value = page
     }
@@ -875,11 +880,11 @@ class PracticeViewModel @Inject constructor(
         // Cancel any stale event collection job from a previous session
         // so we don't double-handle this session's events.
         cancelSttEventCollection()
-        if (!sttRecognizer.isAvailable()) {
-            _sttTestState.value = SttTestState.Transcribed("")
-            _sttAmplitudeBars.value = List(5) { 0.4f }
-            return
-        }
+        // Always enter Listening state so the user sees the recording
+        // overlay. The recognizer may not be available (STT service still
+        // warming up on cold start) — handle that in stopStt() instead of
+        // jumping straight to Transcribed("") which would skip the
+        // "正在录音" overlay entirely.
         _sttTestState.value = SttTestState.Listening(0L)
         sttEventCollectionJob = viewModelScope.launch {
             sttRecognizer.events.collect { event ->
@@ -890,7 +895,14 @@ class PracticeViewModel @Inject constructor(
                 }
             }
         }
-        sttRecognizer.start(language = "en-US")
+        // Try to start the recognizer. If isAvailable() is false (STT
+        // service not yet ready), track that and let stopStt() handle it
+        // — the user can still release to stop the overlay, then re-press
+        // once the service is warm.
+        sttRecognizerStarted = sttRecognizer.isAvailable()
+        if (sttRecognizerStarted) {
+            sttRecognizer.start(language = "en-US")
+        }
         startSttTimers()
     }
 
@@ -903,19 +915,31 @@ class PracticeViewModel @Inject constructor(
             // finalizing. The recognizer may have been started already
             // (since STT_MIN_HOLD_MS is short) — stop() it cleanly so
             // we don't leak an active recognizer.
-            sttRecognizer.stop()
+            if (sttRecognizerStarted) sttRecognizer.stop()
             stopSttElapsedTimer()
             cancelSttEventCollection()
             _sttTestState.value = SttTestState.Idle
             _sttAmplitudeBars.value = List(5) { 0.4f }
+            sttRecognizerStarted = false
             return
         }
-        // Normal release: signal end-of-input and wait for the result.
-        // We deliberately do NOT cancel the event collection job here —
-        // it must stay alive to receive the onResults/onError callback
-        // that stopListening() triggers asynchronously.
-        sttRecognizer.stop()
-        stopSttElapsedTimer()
+        if (sttRecognizerStarted) {
+            // Normal release: signal end-of-input and wait for the result.
+            // We deliberately do NOT cancel the event collection job here
+            // — it must stay alive to receive the onResults/onError
+            // callback that stopListening() triggers asynchronously.
+            sttRecognizer.stop()
+            stopSttElapsedTimer()
+            sttRecognizerStarted = false
+        } else {
+            // Recognizer was never started (STT service wasn't available).
+            // No result is coming. Transition to Transcribed("") so the
+            // user sees the post-recording editor and can manually type
+            // their answer.
+            stopSttElapsedTimer()
+            cancelSttEventCollection()
+            _sttTestState.value = SttTestState.Transcribed("")
+        }
     }
 
     private fun onSttResults(text: String) {
@@ -964,6 +988,7 @@ class PracticeViewModel @Inject constructor(
         cancelSttEventCollection()
         _sttTestState.value = SttTestState.Idle
         _sttAmplitudeBars.value = List(5) { 0.4f }
+        sttRecognizerStarted = false
     }
 
     /** User submitted the transcription for matching. */
