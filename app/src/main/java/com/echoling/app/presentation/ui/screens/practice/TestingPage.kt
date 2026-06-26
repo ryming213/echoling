@@ -84,7 +84,6 @@ fun TestingPage(
                     RecordingOverlay(
                         elapsedMs = s.elapsedMs,
                         amplitudeBars = sttAmplitudeBars,
-                        onCancel = { viewModel.cancelStt() },
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp)
