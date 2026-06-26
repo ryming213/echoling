@@ -16,15 +16,28 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Recording overlay shown during STT capture.
- * Displays a pulsing red dot, "正在录音…" text, 5 amplitude bars (random v1),
- * elapsed time, and a cancel button.
+ *
+ * Minimal design (per user spec): just a pulsing red dot, "正在录音…
+ * 松开结束" text, and the amplitude bar animation below. No timer, no
+ * cancel button — the user simply releases the mic button to stop.
+ *
+ * The amplitude bars are spread evenly across the full card width via
+ * [Arrangement.SpaceEvenly] so the row is wider than the bars
+ * themselves would be. Bars are 3dp wide (thinner than the previous
+ * 6dp) and use a clean white color on the translucent red background
+ * for high contrast.
+ *
+ * @param elapsedMs kept for API compatibility with the ViewModel's
+ *        state; not displayed (the timer was removed per user request)
+ * @param amplitudeBars list of 0..1 normalized bar heights; expected
+ *        to be 5 entries (matches the ViewModel's [List(5) { 0.4f }])
+ * @param modifier modifier for the outer Card
  */
 @Composable
 fun RecordingOverlay(
     elapsedMs: Long,
     amplitudeBars: List<Float>,
-    onCancel: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -50,21 +63,6 @@ fun RecordingOverlay(
             }
             Spacer(Modifier.height(12.dp))
             AmplitudeBars(values = amplitudeBars)
-            Spacer(Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "%.1fs".format(elapsedMs / 1000.0),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onErrorContainer
-                )
-                TextButton(onClick = onCancel) {
-                    Text("取消", color = MaterialTheme.colorScheme.onErrorContainer)
-                }
-            }
         }
     }
 }
@@ -90,36 +88,47 @@ private fun PulsingRedDot() {
     )
 }
 
+/**
+ * Five amplitude bars spread evenly across [modifier]'s width.
+ * Each bar is 3dp wide with a 1.5dp rounded corner (thinner and
+ * more elegant than the previous 6dp/3dp design). Active bars use
+ * pure white for high contrast on the translucent red card;
+ * placeholder bars (when fewer than 5 values are provided) use
+ * 30% opacity white.
+ */
 @Composable
 private fun AmplitudeBars(
     values: List<Float>,
     modifier: Modifier = Modifier,
-    barCount: Int = 5
+    barCount: Int = 5,
 ) {
     Row(
-        modifier = modifier.height(40.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .height(40.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.Bottom
     ) {
         val bars = if (values.size >= barCount) values.take(barCount) else values
+        // Placeholders for missing values (always rendered first so
+        // the actual bars stay at the end of the row).
+        repeat(barCount - bars.size) {
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(1.5.dp))
+                    .background(Color.White.copy(alpha = 0.3f))
+            )
+        }
         bars.forEach { value ->
             val height = (8 + value * 24).dp
             Box(
                 modifier = Modifier
-                    .width(6.dp)
+                    .width(3.dp)
                     .height(height)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(MaterialTheme.colorScheme.onErrorContainer)
-            )
-        }
-        // Fill remaining if fewer bars than barCount
-        repeat(barCount - bars.size) {
-            Box(
-                modifier = Modifier
-                    .width(6.dp)
-                    .height(8.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.3f))
+                    .clip(RoundedCornerShape(1.5.dp))
+                    .background(Color.White)
             )
         }
     }
