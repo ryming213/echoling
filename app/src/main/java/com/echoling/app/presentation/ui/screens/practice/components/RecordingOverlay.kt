@@ -29,7 +29,7 @@ fun RecordingOverlay(
     Card(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer
+            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.72f)
         ),
         modifier = modifier
     ) {
