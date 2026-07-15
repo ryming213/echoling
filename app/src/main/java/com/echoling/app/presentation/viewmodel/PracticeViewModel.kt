@@ -23,19 +23,24 @@ import com.echoling.app.domain.usecase.UpdateSentenceTestedUseCase
 import com.echoling.app.player.AudioPlayer
 import com.echoling.app.player.PlaybackState
 import com.echoling.app.player.subtitle.Subtitle
-import com.echoling.app.player.subtitle.SubtitleMode
 import com.echoling.app.player.subtitle.SubtitleParserFactory
 import com.echoling.app.speech.RecordingResult
 import com.echoling.app.speech.RecordingState
-import com.echoling.app.speech.SttRecognizer
 import com.echoling.app.speech.VoiceRecorder
 import com.echoling.app.speech.WordMatcher
+import com.echoling.app.speech.WavRecorder
+import com.echoling.app.speech.VoskSpeechRecognizer
+import com.echoling.app.speech.ModelManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
@@ -87,6 +92,9 @@ sealed class WordTranslationState {
 sealed class SttTestState {
     data object Idle : SttTestState()
     data class Listening(val elapsedMs: Long = 0L) : SttTestState()
+    /** Vosk is transcribing the recorded WAV file. Shown briefly
+     *  after the user releases the mic, before the editor appears. */
+    data class Transcribing(val recordingPath: String) : SttTestState()
     data class Transcribed(val text: String) : SttTestState()
     data class Passed(val text: String) : SttTestState()
     data class Failed(
@@ -94,6 +102,15 @@ sealed class SttTestState {
         val original: String,
         val origWords: List<String>,
         val transWords: List<String>,
+        // (2026-06-28) Per-word match flags from WordMatcher.
+        // Index-aligned with origWords / transWords. Drives the
+        // per-chip color in TestResultCard.WordChipsRow — the
+        // previous version did strict position-by-position
+        // comparison, which caused a single wrong word to mark
+        // all subsequent (correct) words as wrong too. With
+        // these flags the UI can mark each word independently.
+        val origMatched: BooleanArray = BooleanArray(0),
+        val transMatched: BooleanArray = BooleanArray(0),
         val reason: String
     ) : SttTestState()
 }
@@ -112,20 +129,65 @@ class PracticeViewModel @Inject constructor(
     private val subtitleParserFactory: SubtitleParserFactory,
     private val voiceRecorder: VoiceRecorder,
     private val lookupWordUseCase: LookupWordUseCase,
-    private val sttRecognizer: SttRecognizer,
+    private val wavRecorder: WavRecorder,
+    private val voskRecognizer: VoskSpeechRecognizer,
+    private val modelManager: ModelManager,
 ) : AndroidViewModel(application) {
 
     val playbackState = audioPlayer.playbackState
     val recordingState = voiceRecorder.recordingState
 
-    private val _subtitleMode = MutableStateFlow(SubtitleMode.BILINGUAL)
-    val subtitleMode: StateFlow<SubtitleMode> = _subtitleMode.asStateFlow()
+    /** Vosk model download state — surfaced to TestingPage so the user
+     *  sees a "downloading model" message on first use. */
+    val modelDownloadState = modelManager.downloadState
+    val wavRecordingState = wavRecorder.recordingState
+    val wavAmplitude = wavRecorder.amplitude
 
     private val _subtitles = MutableStateFlow<List<Subtitle>>(emptyList())
     val subtitles: StateFlow<List<Subtitle>> = _subtitles.asStateFlow()
 
-    private val _currentSubtitleIndex = MutableStateFlow(-1)
-    val currentSubtitleIndex: StateFlow<Int> = _currentSubtitleIndex.asStateFlow()
+    // Page switching state. Declared before [_subtitleIndexByPage] /
+    // [currentSubtitleIndex] so the derived StateFlow below can
+    // reference [_currentPage] (forward references aren't allowed in
+    // class bodies).
+    enum class PracticePage { LISTENING, SPEAKING, TESTING }
+    private val _currentPage = MutableStateFlow(PracticePage.LISTENING)
+    val currentPage: StateFlow<PracticePage> = _currentPage.asStateFlow()
+
+    // Per-page subtitle index. v2: the three practice pages (泛听 / 精听 /
+    // 测试) each track their own position in the subtitle list, so
+    // switching tabs no longer makes one page jump to another page's
+    // last position.
+    //
+    // TESTING actually uses [_testState]'s `currentTestIndex` for its
+    // own progress (it has a separate test-item list, see
+    // [startTestMode]). We still include TESTING in the map for
+    // symmetry — its entry just stays at -1 since TESTING never
+    // updates it.
+    //
+    // Initial value -1 means "no subtitle focused yet" (before any
+    // playback or skip action).
+    private val _subtitleIndexByPage = MutableStateFlow<Map<PracticePage, Int>>(
+        mapOf(
+            PracticePage.LISTENING to -1,
+            PracticePage.SPEAKING to -1,
+            PracticePage.TESTING to -1,
+        )
+    )
+    val subtitleIndexByPage: StateFlow<Map<PracticePage, Int>> = _subtitleIndexByPage.asStateFlow()
+
+    /**
+     * UI-bound: the current page's subtitle index.
+     *
+     * The UI doesn't need to know there's a per-page map — it just
+     * reads the right value for the page it's on. Switching pages
+     * (via [setCurrentPage]) automatically updates this derived flow
+     * because [combine] reacts to [_currentPage] changes.
+     */
+    val currentSubtitleIndex: StateFlow<Int> = combine(
+        _currentPage, _subtitleIndexByPage
+    ) { page, map -> map[page] ?: -1 }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, -1)
 
     private var currentSubtitleObj: Subtitle? = null
     private var positionUpdateJob: Job? = null
@@ -180,8 +242,22 @@ class PracticeViewModel @Inject constructor(
 
     // Recording playback
     private var mediaPlayer: MediaPlayer? = null
-    private val _recordingPath = MutableStateFlow<String?>(null)
-    val recordingPath: StateFlow<String?> = _recordingPath.asStateFlow()
+    // (2026-06-28) Per-page recording paths. Previously a single
+    // _recordingPath was shared between SpeakingPage (via
+    // stopRecording → VoiceRecorder) and TestingPage (via
+    // stopStt → WavRecorder for Vosk). The shared flow meant the
+    // recording made on one page leaked into the other page's
+    // "播放录音" / 回放录音 button — e.g. recording on the test
+    // page, switching to the speaking page, the speaking page
+    // would show "我的录音 / 点击播放" with the test page's audio.
+    // Each page now owns its own path; [playRecording] takes the
+    // path as a parameter so the caller is explicit about which
+    // recording to play.
+    private val _speakingRecordingPath = MutableStateFlow<String?>(null)
+    val speakingRecordingPath: StateFlow<String?> = _speakingRecordingPath.asStateFlow()
+
+    private val _testRecordingPath = MutableStateFlow<String?>(null)
+    val testRecordingPath: StateFlow<String?> = _testRecordingPath.asStateFlow()
 
     private val _isPlayingRecording = MutableStateFlow(false)
     val isPlayingRecording: StateFlow<Boolean> = _isPlayingRecording.asStateFlow()
@@ -193,11 +269,6 @@ class PracticeViewModel @Inject constructor(
 
     private val _isVideoMode = MutableStateFlow(false)
     val isVideoMode: StateFlow<Boolean> = _isVideoMode.asStateFlow()
-
-    // Page switching state
-    enum class PracticePage { LISTENING, SPEAKING, TESTING }
-    private val _currentPage = MutableStateFlow(PracticePage.LISTENING)
-    val currentPage: StateFlow<PracticePage> = _currentPage.asStateFlow()
 
     // Sentence completion/test states (in-memory cache)
     private val _sentenceStates = MutableStateFlow<Map<Int, SentenceState>>(emptyMap())
@@ -227,15 +298,113 @@ class PracticeViewModel @Inject constructor(
 
     private var sttElapsedJob: Job? = null
     private var sttEventCollectionJob: Job? = null
+    private var sttWaitJob: Job? = null
     private var sttPressStartTimeMs: Long = 0L
 
-    // Tracks whether the current Listening session has an active
-    // SpeechRecognizer. False means isAvailable() returned false and the
-    // recognizer was never created, so we can't expect any callbacks.
-    private var sttRecognizerStarted: Boolean = false
+    /**
+     * Slot for the latest STT result text. The Vosk transcribe
+     * coroutine writes here when it completes; it does NOT change
+     * the state machine directly. [stopStt] is the only place that
+     * reads this and performs the Transcribed(...) transition.
+     *
+     * v2: the recognizer is Vosk (offline, file-based), not the
+     * system SpeechRecognizer. The "early error races the user's
+     * release" failure mode of v1 is gone because Vosk runs after
+     * the user releases, not in parallel with the recording.
+     *
+     * null = result not yet arrived (Vosk still running).
+     * ""   = Vosk returned empty / errored, treat as no recognition.
+     * "…"  = Vosk returned the recognized text.
+     */
+    private var sttResult: String? = null
 
     fun setCurrentPage(page: PracticePage) {
+        if (_currentPage.value != page) {
+            // Tab-switch bug fix (2026-06-27): reset audioPlayer state
+            // and clear per-tab playback context so each tab has
+            // independent playback state. Without this reset, the
+            // 50ms position-update loop keeps ticking against the
+            // previous tab's frozen audioPlayer position; the
+            // subtitleProvider callback (see loadSubtitles) then
+            // finds the matching subtitle at that stale position
+            // and writes its index into _subtitleIndexByPage[page]
+            // — the NEW tab's slot — leaking the previous tab's
+            // context into the new tab's UI. Symptom: 泛听 played
+            // sentence 5 → switch to 精听 → 精听 highlights
+            // sentence 5 as currently playing. The isPlaying guard
+            // inside the subtitleProvider is the belt-and-suspenders
+            // backup: even if a future refactor removes the
+            // seekTo(0) here, paused ticks won't leak.
+            resetPlaybackForTabSwitch()
+        }
         _currentPage.value = page
+    }
+
+    /**
+     * Update the current page's subtitle index. Used by the playback
+     * auto-advance and by [skipToSubtitle] / [skipToPreviousSubtitle] /
+     * [skipToNextSubtitle]. Page-aware: only the active page's slot
+     * changes, so switching tabs preserves each page's position.
+     */
+    private fun setCurrentSubtitleIndex(newIndex: Int) {
+        val page = _currentPage.value
+        _subtitleIndexByPage.update { current ->
+            current.toMutableMap().apply { this[page] = newIndex }
+        }
+    }
+
+    /**
+     * Reset playback state when switching between tabs.
+     *
+     * Critical: the audioPlayer is a @Singleton, so its position is
+     * "sticky" across tabs. After pause(), the 50ms position-update
+     * loop (startPositionUpdates, line 649) still calls
+     * audioPlayer.updatePosition() with the frozen position from
+     * the previous tab. The subtitleProvider callback (see
+     * loadSubtitles) then finds the matching subtitle at that
+     * stale position and would write its index into
+     * _subtitleIndexByPage[page] — the NEW tab's slot — leaking
+     * the previous tab's context.
+     *
+     * Belt-and-suspenders with the `playbackState.value.isPlaying`
+     * guard inside the subtitleProvider: this method resets
+     * audioPlayer to a clean state (seekTo(0) etc.) so the next
+     * tick doesn't see a stale position; the isPlaying guard
+     * catches any future refactor that forgets to seekTo(0).
+     *
+     * Order matters: save progress BEFORE seekTo(0) so the user's
+     * last position from the previous tab is persisted (Continue
+     * Learning card on home still picks it up).
+     */
+    private fun resetPlaybackForTabSwitch() {
+        // 1) Persist the previous tab's position before we lose it.
+        saveProgress()
+        // 2) Pause audio/video.
+        if (_isVideoMode.value) {
+            pauseVideo()
+        } else {
+            audioPlayer.pause()
+        }
+        // 3) Clear single-play / skip state.
+        singleSubtitleIndex = -1
+        singleSubtitleEndMs = 0L
+        isSinglePlayMode = false
+        skipTargetListIndex = -1
+        skipTargetTimeoutMs = 0L
+        // 4) Clear "current subtitle" so the new tab doesn't show
+        //    the previous tab's subtitle as its context.
+        currentSubtitleObj = null
+        currentSentenceId = 0
+        // 5) Seek to 0 so the position-update loop's next tick
+        //    doesn't re-trigger the bug with the previous tab's
+        //    position. (subtitleProvider's isPlaying guard also
+        //    blocks auto-advance while paused — this seekTo(0) is
+        //    belt-and-suspenders.)
+        if (_isVideoMode.value) {
+            seekVideoTo(0L)
+        } else {
+            audioPlayer.seekTo(0L)
+        }
     }
 
     fun loadSentenceStates(courseId: String) {
@@ -252,42 +421,200 @@ class PracticeViewModel @Inject constructor(
     }
 
     fun markSentenceCompleted(sentenceId: Int, completed: Boolean) {
+        // (2026-07-04) Bug 2 fix: do the in-memory state update
+        // SYNCHRONOUSLY, before the DB write. The previous ordering
+        // put the StateFlow write inside the coroutine, after
+        // `updateSentenceCompletedUseCase(...)` (which suspends for
+        // the Room write). That meant the dropdown's cell color
+        // didn't update until the DB write finished — usually
+        // <10ms but observable to the user as "I tapped the check,
+        // opened the dropdown, and the cell isn't green yet". Worse,
+        // if the user clicked "下一句" before the DB write finished,
+        // Compose batched the sentenceStates update with the
+        // currentSubtitleIndex update from the next-button click,
+        // making it LOOK like the green only appeared after clicking
+        // next — but it was actually just a delayed snapshot apply.
+        //
+        // Doing the StateFlow write synchronously ensures the change
+        // is visible in the next Compose frame, regardless of when
+        // the DB write lands. The DB write still happens on
+        // viewModelScope as before; if it fails, the in-memory state
+        // is already correct for the current session, and the next
+        // loadSentenceStates() will reconcile from the DB.
+        val current = _sentenceStates.value.toMutableMap()
+        current[sentenceId] = current[sentenceId]?.copy(isCompleted = completed)
+            ?: SentenceState(sentenceId, isCompleted = completed)
+        _sentenceStates.value = current
         viewModelScope.launch {
             updateSentenceCompletedUseCase(currentCourseId, sentenceId, completed)
-            val current = _sentenceStates.value.toMutableMap()
-            current[sentenceId] = current[sentenceId]?.copy(isCompleted = completed)
-                ?: SentenceState(sentenceId, isCompleted = completed)
-            _sentenceStates.value = current
         }
     }
 
     fun markSentenceTested(sentenceId: Int, tested: Boolean) {
-        viewModelScope.launch {
-            updateSentenceTestedUseCase(currentCourseId, sentenceId, tested)
-            val current = _sentenceStates.value.toMutableMap()
-            current[sentenceId] = current[sentenceId]?.copy(isTested = tested)
-                ?: SentenceState(sentenceId, isTested = tested)
-            _sentenceStates.value = current
-            // Sync testedCount in test state
-            if (tested) {
-                val ts = _testState.value
+        // (2026-07-04) Same Bug 2 fix as [markSentenceCompleted]:
+        // hoist the StateFlow writes out of the coroutine so the UI
+        // reflects the change in the next Compose frame instead of
+        // after the DB write completes. Read the prior isTested
+        // BEFORE the synchronous write so the increment-testCount
+        // logic still detects "newly tested".
+        val wasTested = _sentenceStates.value[sentenceId]?.isTested == true
+        val current = _sentenceStates.value.toMutableMap()
+        current[sentenceId] = current[sentenceId]?.copy(isTested = tested)
+            ?: SentenceState(sentenceId, isTested = tested)
+        _sentenceStates.value = current
+        // Sync testedCount in test state. (2026-06-28) Only
+        // increment when this call actually newly-tests a
+        // sentence that is in the current test items. Prevents:
+        //  - Double-tap "标记完成" on the same test item
+        //    incrementing testedCount twice (e.g., 5 → 6 even
+        //    though we only have 5 test items → "6 / 5 已完成"
+        //    display bug).
+        //  - Marking a sentence NOT in the current test items
+        //    inflating testedCount beyond testItems.size
+        //    (e.g., from a future feature that lets users
+        //    mark sentences tested outside test mode).
+        if (tested && !wasTested) {
+            val ts = _testState.value
+            if (ts.testItems.any { it.index == sentenceId }) {
                 _testState.value = ts.copy(testedCount = ts.testedCount + 1)
             }
+        }
+        viewModelScope.launch {
+            updateSentenceTestedUseCase(currentCourseId, sentenceId, tested)
         }
     }
 
     fun startTestMode() {
         val allSubtitles = _subtitles.value.filter { it.index >= 0 }
-        val shuffled = allSubtitles.shuffled()
+        // (2026-06-28) Per user spec: test items = a random 1/3 of
+        // sentences in the current course, with a per-sentence
+        // minimum of 3 words.
+        //   "从当前所学素材中所有句子中随机收取三分之一的句子
+        //    用于测试，要求每个所选的句子长度必须满足至少三个单词"
+        //
+        // The 3-word minimum is a sanity check on the test sample:
+        // - Sentences shorter than 3 words are usually
+        //   interjections / fragments ("Yes.", "Oh, no.", "Sure.")
+        //   that don't exercise comprehension meaningfully.
+        // - They also visually look broken in the test page's
+        //   word-hide UI (fewer than 3 boxes to reveal — the user
+        //   can guess the sentence from 1-2 revealed words).
+        //
+        // We filter BEFORE the random pick so the 1/3 sample isn't
+        // biased: a 30-sentence course with 5 short interjections
+        // would otherwise have ~17% of its pool be untestable;
+        // filtering first gives us a clean 1/3 sample of the
+        // testable subset.
+        //
+        // Word count uses the same whitespace-split heuristic as
+        // [TestingWordsFlowRow] (each visible word block = one
+        // non-blank token) so the filter matches what the user
+        // actually sees on screen.
+        val eligibleSentences = allSubtitles.filter { sub ->
+            val wordCount = sub.contentEn
+                .split(Regex("\\s+"))
+                .count { it.isNotBlank() }
+            wordCount >= 3
+        }
+        // (2026-06-28) Edge case: if NO sentence in the course has
+        // 3+ words (very rare — could happen on a single-line
+        // import or a course with only short phrases), fall back
+        // to all sentences so the test mode can still produce at
+        // least 1 test item instead of leaving the user staring at
+        // "X / 0 已完成".
+        val pool = if (eligibleSentences.isNotEmpty()) eligibleSentences else allSubtitles
+        val shuffled = pool.shuffled()
+        // maxOf(1, ...) preserves the old behavior of always giving
+        // the user at least 1 test item (e.g., a 2-sentence course
+        // → size/3 = 0 → would be 0 test items without this guard).
         val testCount = maxOf(1, shuffled.size / 3)
         val testItems = shuffled.take(testCount)
+        // (2026-06-28) Only count test items that are already marked
+        // tested in the DB. Previously this counted all sentences
+        // in the course, which could exceed testItems.size. The
+        // more-specific count guards against the display ever
+        // showing "X / Y 已完成" with X > Y (the user-reported
+        // testedCount > totalCount bug).
+        val testedSoFar = testItems.count { item ->
+            _sentenceStates.value[item.index]?.isTested == true
+        }
         _testState.value = TestState(
             isActive = true,
             testItems = testItems,
             currentTestIndex = 0,
             revealedWords = emptySet(),
-            testedCount = _sentenceStates.value.values.count { it.isTested }
+            testedCount = testedSoFar
         )
+        // (2026-06-28) Make sure no leftover STT / recording state
+        // bleeds into the new session — a previous mid-test STT
+        // attempt (Listening / Transcribing / Transcribed / etc.)
+        // would otherwise show up on the freshly-started session's
+        // first sentence and confuse the user.
+        resetStt()
+        // (2026-06-28) Stop any in-progress audio playback from the
+        // previous test attempt — typically the user is starting a
+        // fresh round, audio from the old session shouldn't continue
+        // playing into the new one.
+        if (_isVideoMode.value) pauseVideo() else audioPlayer.pause()
+    }
+
+    /**
+     * (2026-06-28) "重新测试" button action — user wants to start a
+     * brand-new test round from X=1. Per user spec:
+     *   "用户也可以再进行新的一轮测试，所有需要增加一个按钮
+     *    重新测试/刷新图标，放在测试页面的右上角"
+     *
+     * Steps:
+     *   1. Un-mark all current test items in _sentenceStates so
+     *      the counter starts fresh at 0. (Otherwise re-using
+     *      pre-tested sentences wouldn't increment testedCount —
+     *      [markSentenceTested] is idempotent for already-tested
+     *      items, and testedCount would never reach testItems.size
+     *      → "round complete" state never triggers.)
+     *   2. Persist the un-marking to DB so a process kill doesn't
+     *      leave the DB out of sync with what the UI shows.
+     *   3. Reset STT state (any leftover Listening/Transcribed UI
+     *      from the old round should be cleared).
+     *   4. Delegate to [startTestMode] to re-initialize the test
+     *      state with X=1.
+     *
+     * Order matters: un-mark in _sentenceStates FIRST so
+     * [startTestMode]'s `testedSoFar` computation reads the cleared
+     * state and starts at 0. If we called startTestMode first,
+     * `testedSoFar` would be Y (all tested), and un-marking later
+     * would only lower the in-memory state — the counter would stay
+     * at Y.
+     */
+    fun restartTest() {
+        val current = _testState.value
+        if (current.isActive && current.testItems.isNotEmpty()) {
+            val newStates = _sentenceStates.value.toMutableMap()
+            current.testItems.forEach { item ->
+                val existing = newStates[item.index]
+                    ?: SentenceState(item.index)
+                newStates[item.index] = existing.copy(isTested = false)
+            }
+            _sentenceStates.value = newStates
+            // Persist un-marking to DB (async). Same viewModelScope
+            // channel as markSentenceTested uses, so the two don't
+            // race: this launches AFTER the synchronous state flip
+            // above, and any subsequent markSentenceTested call from
+            // the UI fires its own launch.
+            val courseId = currentCourseId
+            if (courseId.isNotBlank()) {
+                viewModelScope.launch {
+                    current.testItems.forEach { item ->
+                        updateSentenceTestedUseCase(courseId, item.index, false)
+                    }
+                }
+            }
+        }
+        // Cancel any in-progress STT (recording / transcribing /
+        // transcribed) and audio from the old round.
+        cancelStt()
+        if (_isVideoMode.value) pauseVideo() else audioPlayer.pause()
+        // Re-initialize test state (X=1, testedCount=0).
+        startTestMode()
     }
 
     fun nextTestItem() {
@@ -298,6 +625,30 @@ class PracticeViewModel @Inject constructor(
                 revealedWords = emptySet()
             )
         }
+    }
+
+    /**
+     * Advance to the next test item AND clear any STT result state.
+     *
+     * (2026-07-05) Bug fix: previously the ControlBar's 下一题
+     * button only called [nextTestItem], leaving [_sttTestState]
+     * at `Passed` / `Failed` so the result card from the just-
+     * finished sentence stayed on screen while the new sentence's
+     * subtitle card appeared above it. Users saw what looked like
+     * "next sentence already tested + showing the passed card"
+     * because both cards rendered simultaneously.
+     *
+     * The TestResultCard's own 下一题 button already called
+     * `nextTestItem(); resetStt()` to avoid this — the ControlBar's
+     * 下一题 just didn't. Routing both callsites through this
+     * helper keeps them in sync.
+     *
+     * Also called from the Failed card's 下一题 for the same
+     * reason.
+     */
+    fun advanceToNextTestItem() {
+        nextTestItem()
+        resetStt()
     }
 
     fun previousTestItem() {
@@ -438,19 +789,24 @@ class PracticeViewModel @Inject constructor(
     }
 
     fun playVideo() {
+        // In video mode, audioPlayer is a UI-state holder only — the actual
+        // playback engine is videoPlayer (which carries the audio track of the
+        // MKV itself). Calling audioPlayer.play() here is a no-op for the
+        // empty audioPlayer ExoPlayer but used to cause two ExoPlayers to
+        // race for audio focus. The position-update loop mirrors videoPlayer
+        // state into audioPlayer.playbackState via updatePositionFromExternal.
         videoPlayer?.play()
-        audioPlayer.play()
     }
 
     fun pauseVideo() {
         videoPlayer?.pause()
-        audioPlayer.pause()
         singleSubtitleIndex = -1
     }
 
     fun seekVideoTo(positionMs: Long) {
+        // Seek only the actual playback engine. audioPlayer's UI state is
+        // updated on the next 50ms tick via updatePositionFromExternal.
         videoPlayer?.seekTo(positionMs)
-        audioPlayer.seekTo(positionMs)
     }
 
     fun getVideoCurrentPosition(): Long = videoPlayer?.currentPosition ?: 0L
@@ -502,6 +858,20 @@ class PracticeViewModel @Inject constructor(
                     android.util.Log.d("PracticeViewModel", "Parsed ${parsed.size} subtitles")
                     _subtitles.value = parsed
 
+                    // (2026-07-10) §12.39: Auto-land on first sentence when a
+                    // page's subtitle-index slot is still at -1 (initial
+                    // value before any playback or skip). Before this, the
+                    // dropdown button rendered "0 / N" because
+                    // currentSubtitleIndex started at -1 and never moved
+                    // (no playback happens on first entry to SpeakingPage).
+                    //
+                    // Only initialize slots that are still at -1 — if the user
+                    // already navigated to sentence 5 via skipToSubtitle, we
+                    // must not reset their position.
+                    _subtitleIndexByPage.update { current ->
+                        current.mapValues { (_, idx) -> if (idx == -1) 0 else idx }
+                    }
+
                     // Sync sentences to database so completion/test status persists
                     syncSentencesToDb(parsed)
 
@@ -526,20 +896,56 @@ class PracticeViewModel @Inject constructor(
                             // When skipTargetListIndex is set, only update index when we reach the target
                             if (skipTargetListIndex >= 0) {
                                 if (listIndex == skipTargetListIndex) {
-                                    _currentSubtitleIndex.value = listIndex
+                                    setCurrentSubtitleIndex(listIndex)
                                     skipTargetListIndex = -1 // Target reached, clear guard
                                     skipTargetTimeoutMs = 0L
                                     android.util.Log.d("PracticeViewModel", "skip target reached: listIndex=$listIndex")
                                 } else if (System.currentTimeMillis() > skipTargetTimeoutMs) {
-                                    // Timeout: seek took too long, accept whatever we matched
-                                    _currentSubtitleIndex.value = listIndex
+                                    // (2026-07-04) Bug 1 fix: previous behavior
+                                    // called setCurrentSubtitleIndex(listIndex)
+                                    // here, which forced the UI back to
+                                    // whatever subtitle the audio happened
+                                    // to be at — usually the OLD one if
+                                    // seek hadn't completed (paused state,
+                                    // or audio position reading returning
+                                    // stale exoPlayer.currentPosition while
+                                    // ExoPlayer's seek was still in
+                                    // flight). Symptom: click "下一句"
+                                    // → UI shows new sentence → ~1 second
+                                    // later UI jumps back to previous.
+                                    //
+                                    // New behavior: clear the skipTarget
+                                    // guard so the next tick can run its
+                                    // natural isPlaying branch, but do
+                                    // NOT overwrite the user's explicit
+                                    // navigation. If audio truly never
+                                    // reached the target, the playing
+                                    // branch will eventually align UI to
+                                    // the audio's actual position — that
+                                    // path is honest because it reflects
+                                    // what the user is hearing. The 3-second
+                                    // timeout here was conflating "seek
+                                    // never finished" with "user changed
+                                    // their mind", which is wrong.
                                     skipTargetListIndex = -1
                                     skipTargetTimeoutMs = 0L
-                                    android.util.Log.d("PracticeViewModel", "skip target timeout: falling back to listIndex=$listIndex")
+                                    android.util.Log.d("PracticeViewModel", "skip target timeout: clearing guard without reverting UI (audio still at listIndex=$listIndex)")
                                 }
                                 // else: still seeking, don't update index
-                            } else if (!isSinglePlayMode) {
-                                _currentSubtitleIndex.value = listIndex
+                            } else if (!isSinglePlayMode && playbackState.value.isPlaying) {
+                                // Tab-switch bug fix (2026-06-27): when
+                                // paused, don't auto-advance
+                                // _subtitleIndexByPage. The audioPlayer
+                                // position freezes on pause but the
+                                // 50ms tick keeps firing — without this
+                                // guard the residual ticks would write
+                                // the previous tab's subtitle into the
+                                // new tab's per-page slot. User actions
+                                // (skipTo* / seekToSubtitle) write to
+                                // setCurrentSubtitleIndex directly and
+                                // bypass this guard, so explicit
+                                // navigation still works.
+                                setCurrentSubtitleIndex(listIndex)
                             }
                             sub.contentEn
                         } else {
@@ -585,7 +991,17 @@ class PracticeViewModel @Inject constructor(
                     audioPlayer.updatePosition()
                     if (singleSubtitleIndex >= 0) {
                         val currentPos = audioPlayer.getCurrentPosition()
-                        if (currentPos >= singleSubtitleEndMs - 500) {
+                        val threshold = singleSubtitleEndMs - 500
+                        // §12.36: diagnostic log on every gate check
+                        // while single-play is active. If the
+                        // "continues past subtitle end" symptom
+                        // recurs, this line is what we need in
+                        // logcat — it shows the exact
+                        // currentPos / endMs / singleSubtitleIndex
+                        // at every 50ms tick. Filter logcat with
+                        // `tag:PracticeViewModel` to capture.
+                        android.util.Log.d("PracticeViewModel", "single-play gate: currentPos=$currentPos, endMs=$singleSubtitleEndMs, threshold=$threshold, singleSubtitleIndex=$singleSubtitleIndex, isPlaying=${playbackState.value.isPlaying}")
+                        if (currentPos >= threshold) {
                             audioPlayer.pause()
                             android.util.Log.d("PracticeViewModel", "Single play ended: currentPos=$currentPos, endMs=$singleSubtitleEndMs")
                             singleSubtitleIndex = -1
@@ -628,6 +1044,24 @@ class PracticeViewModel @Inject constructor(
     fun playSubtitleOnce(subtitle: Subtitle) {
         val index = _subtitles.value.indexOf(subtitle)
         android.util.Log.d("PracticeViewModel", "playSubtitleOnce: subtitle.index=${subtitle.index}, listIndex=$index, total=${_subtitles.value.size}")
+        // §12.36: set the single-play fields BEFORE starting playback
+        // and bypass play()'s clear-state contract. The previous
+        // design (see git history for §12.34) called play() between
+        // two field-set blocks: play() would wipe singleSubtitleIndex /
+        // singleSubtitleEndMs / isSinglePlayMode to (-1, 0L, false),
+        // and the second block would re-arm them. Same-thread analysis
+        // showed the gap between play() returning and the re-arm was
+        // microseconds — well within a single statement's window — so
+        // the position-update loop could not fire during it. The
+        // residual "continues past subtitle end" failure that survived
+        // §12.34 (user reported 2026-07-04: "多数情况下会自动暂停,有时候会
+        // 出现继续往后播放") suggested the race window was real on some
+        // devices — possibly under thread contention that let the
+        // coroutine scheduler advance past one statement boundary. To
+        // eliminate the race class entirely we now set the fields
+        // FIRST and call audioPlayer.play() directly, sidestepping
+        // play()'s clear-state contract (which is meant for the
+        // continuous-mode play button, not for entering single-play).
         singleSubtitleIndex = index
         singleSubtitleEndMs = subtitle.endTimeMs
         isSinglePlayMode = true
@@ -636,7 +1070,9 @@ class PracticeViewModel @Inject constructor(
         if (_isVideoMode.value) {
             playVideo()
         } else {
-            play()
+            // Bypass play() — its contract is "exit single-play mode"
+            // for the play button, the opposite of what we want here.
+            audioPlayer.play()
         }
     }
 
@@ -646,6 +1082,16 @@ class PracticeViewModel @Inject constructor(
         } else {
             audioPlayer.play()
         }
+        // §12.34: the play button (ListeningPage's progress-bar /
+        // bottom-controls play) is the ONLY way to resume continuous
+        // auto-advance from a single-play state. Tapping a sentence
+        // row calls playSubtitleOnce() (which re-arms the flag after
+        // this call returns); tapping prev/next also clears the flag
+        // in its own skip flow. So the play button is the canonical
+        // "exit single-play" gesture.
+        isSinglePlayMode = false
+        singleSubtitleIndex = -1
+        singleSubtitleEndMs = 0L
     }
 
     fun pause() {
@@ -676,7 +1122,7 @@ class PracticeViewModel @Inject constructor(
         }
         currentSubtitleObj = subtitle
         currentSentenceId = subtitle.index
-        _currentSubtitleIndex.value = _subtitles.value.indexOf(subtitle)
+        setCurrentSubtitleIndex(_subtitles.value.indexOf(subtitle))
     }
 
     fun setPlaybackSpeed(speed: Float) {
@@ -688,22 +1134,6 @@ class PracticeViewModel @Inject constructor(
         val newLooping = !playbackState.value.isLooping
         audioPlayer.setLooping(newLooping)
         videoPlayer?.repeatMode = if (newLooping) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
-    }
-
-    fun getCurrentSubtitle(): String? {
-        return currentSubtitleObj?.getContent(_subtitleMode.value)
-    }
-
-    fun setSubtitleMode(mode: SubtitleMode) {
-        _subtitleMode.value = mode
-    }
-
-    fun cycleSubtitleMode() {
-        _subtitleMode.value = when (_subtitleMode.value) {
-            SubtitleMode.BILINGUAL -> SubtitleMode.ENGLISH
-            SubtitleMode.ENGLISH -> SubtitleMode.CHINESE
-            SubtitleMode.CHINESE -> SubtitleMode.BILINGUAL
-        }
     }
 
     fun seekBackward(ms: Long = 5000) {
@@ -719,14 +1149,20 @@ class PracticeViewModel @Inject constructor(
     }
 
     fun skipToSubtitle(index: Int? = null) {
-        isSinglePlayMode = false
-        singleSubtitleIndex = -1
-        val targetIndex = index ?: _currentSubtitleIndex.value
+        // (2026-07-05) Bug fix: see skipToPreviousSubtitle /
+        // skipToNextSubtitle — re-arm single-play for the target
+        // sentence. Without this, jumping to a sentence via the
+        // dropdown menu would also fall into continuous-play and
+        // run through every following subtitle.
+        val targetIndex = index ?: currentSubtitleIndex.value
         if (targetIndex >= 0 && targetIndex < _subtitles.value.size) {
             val targetSubtitle = _subtitles.value[targetIndex]
             currentSubtitleObj = targetSubtitle
             currentSentenceId = targetSubtitle.index
-            _currentSubtitleIndex.value = targetIndex
+            setCurrentSubtitleIndex(targetIndex)
+            singleSubtitleIndex = targetIndex
+            singleSubtitleEndMs = targetSubtitle.endTimeMs
+            isSinglePlayMode = true
             skipTargetListIndex = targetIndex
             skipTargetTimeoutMs = System.currentTimeMillis() + 3000
             seekTo(targetSubtitle.startTimeMs)
@@ -734,16 +1170,23 @@ class PracticeViewModel @Inject constructor(
     }
 
     fun skipToPreviousSubtitle() {
-        isSinglePlayMode = false
-        singleSubtitleIndex = -1
-        val currentIndex = _currentSubtitleIndex.value
+        // (2026-07-05) Bug fix: the skip-* paths used to clear
+        // single-play state and never re-arm it for the new
+        // sentence, so after a skip the player fell into normal
+        // continuous-play mode and ran through every following
+        // sentence. Now re-arm single-play for the target
+        // sentence so playback stops at its endTimeMs.
+        val currentIndex = currentSubtitleIndex.value
         val newIndex = if (currentIndex > 0) currentIndex - 1 else 0
         if (_subtitles.value.isNotEmpty()) {
             val targetSubtitle = _subtitles.value[newIndex]
             android.util.Log.d("PracticeViewModel", "skipToPreviousSubtitle: currentIndex=$currentIndex, newIndex=$newIndex, targetSubtitleIndex=${targetSubtitle.index}")
             currentSubtitleObj = targetSubtitle
             currentSentenceId = targetSubtitle.index
-            _currentSubtitleIndex.value = newIndex
+            setCurrentSubtitleIndex(newIndex)
+            singleSubtitleIndex = newIndex
+            singleSubtitleEndMs = targetSubtitle.endTimeMs
+            isSinglePlayMode = true
             skipTargetListIndex = newIndex
             skipTargetTimeoutMs = System.currentTimeMillis() + 3000
             seekTo(targetSubtitle.startTimeMs)
@@ -751,16 +1194,23 @@ class PracticeViewModel @Inject constructor(
     }
 
     fun skipToNextSubtitle() {
-        isSinglePlayMode = false
-        singleSubtitleIndex = -1
-        val currentIndex = _currentSubtitleIndex.value
+        // (2026-07-05) Bug fix: see skipToPreviousSubtitle —
+        // re-arm single-play for the target sentence so playback
+        // stops at its endTimeMs instead of rolling into the next
+        // subtitle. Without this, clicking "下一句" during
+        // playback of A would jump to B then keep going through
+        // C, D, E…
+        val currentIndex = currentSubtitleIndex.value
         val newIndex = if (currentIndex < _subtitles.value.size - 1) currentIndex + 1 else _subtitles.value.size - 1
         if (_subtitles.value.isNotEmpty()) {
             val targetSubtitle = _subtitles.value[newIndex.coerceAtLeast(0)]
             android.util.Log.d("PracticeViewModel", "skipToNextSubtitle: currentIndex=$currentIndex, newIndex=$newIndex, targetSubtitleIndex=${targetSubtitle.index}")
             currentSubtitleObj = targetSubtitle
             currentSentenceId = targetSubtitle.index
-            _currentSubtitleIndex.value = newIndex
+            setCurrentSubtitleIndex(newIndex)
+            singleSubtitleIndex = newIndex
+            singleSubtitleEndMs = targetSubtitle.endTimeMs
+            isSinglePlayMode = true
             skipTargetListIndex = newIndex
             skipTargetTimeoutMs = System.currentTimeMillis() + 3000
             seekTo(targetSubtitle.startTimeMs)
@@ -862,7 +1312,11 @@ class PracticeViewModel @Inject constructor(
     fun stopRecording(): RecordingResult? {
         val result = voiceRecorder.stopRecording()
         result?.let {
-            _recordingPath.value = it.filePath
+            // (2026-06-28) Write to the speaking-page path. Does
+            // NOT touch _testRecordingPath — recordings made in
+            // the speaking page should not appear in the test
+            // page's 回放 button, and vice versa.
+            _speakingRecordingPath.value = it.filePath
         }
         return result
     }
@@ -872,80 +1326,233 @@ class PracticeViewModel @Inject constructor(
     }
 
     // ─── STT word-match testing ────────────────────────────────────
+    //
+    // v2 flow (Vosk-based, replaces the system SpeechRecognizer that
+    // the previous version used). Why the change:
+    //   - System SpeechRecognizer + MediaRecorder cannot share the mic
+    //     (Android audio HAL allows only one consumer per stream), so
+    //     any attempt to give the user both a recording file AND a
+    //     transcription failed with one side getting silence.
+    //   - Vosk is offline, accepts a WAV file, and gives us text from
+    //     the exact audio we recorded. So we record with WavRecorder
+    //     (AudioRecord → 16 kHz mono 16-bit PCM WAV file) and then
+    //     run Vosk on that file after the user releases the mic.
+    //   - The recording file is preserved for playback (sets
+    //     _recordingPath so the existing 回放 button works), AND Vosk
+    //     gives us text → "显示文字" button works too.
+    //
+    // State machine:
+    //   Idle → (press) → Listening → (release) → Transcribing(path)
+    //   → (vosk done) → Transcribed(text)
+    //   → (submit) → Passed / Failed
+    //   → (重录) → Idle
 
-    /** Start STT. Called by UI onPress of mic button. */
+    /**
+     * Start recording via WavRecorder. Kicks off the Vosk model
+     * download in the background (no-op if already present) so the
+     * first transcribe is fast on subsequent uses.
+     */
     fun startStt() {
         if (_sttTestState.value is SttTestState.Listening) return
         sttPressStartTimeMs = System.currentTimeMillis()
-        // Cancel any stale event collection job from a previous session
-        // so we don't double-handle this session's events.
+        sttWaitJob?.cancel()
+        sttWaitJob = null
+        sttResult = null
         cancelSttEventCollection()
-        // Always enter Listening state so the user sees the recording
-        // overlay. The recognizer may not be available (STT service still
-        // warming up on cold start) — handle that in stopStt() instead of
-        // jumping straight to Transcribed("") which would skip the
-        // "正在录音" overlay entirely.
         _sttTestState.value = SttTestState.Listening(0L)
-        sttEventCollectionJob = viewModelScope.launch {
-            sttRecognizer.events.collect { event ->
-                when (event) {
-                    is SttRecognizer.SttEvent.Results -> onSttResults(event.text)
-                    is SttRecognizer.SttEvent.Error -> onSttResults("")
-                    is SttRecognizer.SttEvent.PartialResults -> { /* v1 ignore */ }
-                }
+
+        // Start the recording. WavRecorder writes a 16 kHz mono WAV
+        // file under cacheDir/recordings/recording_<ts>.wav.
+        try {
+            val path = wavRecorder.start()
+            android.util.Log.d("SttTest", "startStt: wavRecorder started at $path")
+        } catch (e: Throwable) {
+            android.util.Log.e("SttTest", "startStt: wavRecorder.start failed", e)
+            // Couldn't start recording — bounce back to Idle.
+            _sttTestState.value = SttTestState.Idle
+            return
+        }
+
+        // Kick off model download in background. If the model is
+        // already present this short-circuits to Ready in a few ms.
+        // If the user is on a slow connection on first use, the
+        // download may still be in flight when they release the mic
+        // — in that case stopStt() will await the download before
+        // transcribing.
+        if (!modelManager.isModelReady()) {
+            viewModelScope.launch {
+                modelManager.ensureModelReady()
             }
         }
-        // Try to start the recognizer. If isAvailable() is false (STT
-        // service not yet ready), track that and let stopStt() handle it
-        // — the user can still release to stop the overlay, then re-press
-        // once the service is warm.
-        sttRecognizerStarted = sttRecognizer.isAvailable()
-        if (sttRecognizerStarted) {
-            sttRecognizer.start(language = "en-US")
-        }
+
         startSttTimers()
     }
 
-    /** Stop STT. Called by UI onRelease of mic button. */
+    /**
+     * Stop recording. Called by UI onRelease of mic button.
+     *
+     * Flow:
+     *   1. If the user released too quickly, treat as accidental and
+     *      bounce back to Idle (matches the previous v1 behavior so
+     *      "I brushed the mic" doesn't pollute the editor).
+     *   2. Otherwise, stop the WavRecorder → we have a .wav file.
+     *      Publish its path to _recordingPath so the 回放 button works.
+     *   3. Transition to Transcribing(path) and run Vosk in a
+     *      coroutine. Vosk may block briefly on first use while
+     *      ModelManager downloads the model. On any failure we fall
+     *      back to Transcribed("") — the user can still type manually.
+     */
     fun stopStt() {
         if (_sttTestState.value !is SttTestState.Listening) return
         val holdMs = System.currentTimeMillis() - sttPressStartTimeMs
         if (holdMs < STT_MIN_HOLD_MS) {
-            // Treat as accidental press: skip STT, return to Idle without
-            // finalizing. The recognizer may have been started already
-            // (since STT_MIN_HOLD_MS is short) — stop() it cleanly so
-            // we don't leak an active recognizer.
-            if (sttRecognizerStarted) sttRecognizer.stop()
+            // Accidental press — discard the recording, return to Idle.
+            try { wavRecorder.cancel() } catch (_: Throwable) {}
+            sttWaitJob?.cancel()
+            sttWaitJob = null
             stopSttElapsedTimer()
-            cancelSttEventCollection()
             _sttTestState.value = SttTestState.Idle
             _sttAmplitudeBars.value = List(5) { 0.4f }
-            sttRecognizerStarted = false
+            sttResult = null
             return
         }
-        if (sttRecognizerStarted) {
-            // Normal release: signal end-of-input and wait for the result.
-            // We deliberately do NOT cancel the event collection job here
-            // — it must stay alive to receive the onResults/onError
-            // callback that stopListening() triggers asynchronously.
-            sttRecognizer.stop()
-            stopSttElapsedTimer()
-            sttRecognizerStarted = false
-        } else {
-            // Recognizer was never started (STT service wasn't available).
-            // No result is coming. Transition to Transcribed("") so the
-            // user sees the post-recording editor and can manually type
-            // their answer.
-            stopSttElapsedTimer()
-            cancelSttEventCollection()
-            _sttTestState.value = SttTestState.Transcribed("")
+        // Stop the recorder and capture the file path.
+        val rec = try {
+            wavRecorder.stop()
+        } catch (e: Throwable) {
+            android.util.Log.e("SttTest", "stopStt: wavRecorder.stop failed", e)
+            null
+        }
+        stopSttElapsedTimer()
+        val path = rec?.filePath
+        if (path == null) {
+            // Recorder didn't yield a file — treat as no input.
+            _sttTestState.value = SttTestState.Idle
+            return
+        }
+        // Publish the file for playback (回放 button reads this).
+        // (2026-06-28) Write to the test-page path. Does NOT touch
+        // _speakingRecordingPath — STT recordings made in the test
+        // page should not appear in the speaking page's "我的录音"
+        // playback card, and vice versa.
+        _testRecordingPath.value = path
+
+        // Show a "正在识别" intermediate state, then run Vosk.
+        _sttTestState.value = SttTestState.Transcribing(path)
+        sttWaitJob?.cancel()
+        sttWaitJob = viewModelScope.launch {
+            // Ensure model is bundled and ready before transcribing.
+            // The Vosk model is shipped inside the APK at
+            // `assets/models/vosk-model-small-en-us-0.15/` and is
+            // unpacked to internal storage on first use (~1s). After
+            // that it short-circuits in milliseconds — there is no
+            // network download.
+            //
+            // (2026-07-10) Constrained grammar was tried here (passing
+            // currentTest.contentEn as the only allowed phrase) but
+            // it made WER strictly worse — Vosk's grammar mode is
+            // exact-phrase match, so any filler word or single-token
+            // deviation yields the empty string. Open-vocabulary
+            // returns the close-but-wrong text and lets WordMatcher
+            // give partial credit. See VoskSpeechRecognizer.transcribeFile
+            // for the longer writeup.
+            val modelReady = modelManager.ensureModelReady()
+            if (modelReady.isFailure) {
+                android.util.Log.e("SttTest", "stopStt: model not ready, manual entry", modelReady.exceptionOrNull())
+                _sttTestState.value = SttTestState.Transcribed("")
+                return@launch
+            }
+            // (2026-07-10) Use n-best transcription. Vosk's small
+            // model (WER ~10%) often returns a Top-1 that's "close
+            // but wrong" when the speech is ambiguous; the Top-3
+            // contains the correct phrase frequently. We ask Vosk
+            // for up to 3 alternatives and let WordMatcher vote
+            // across them, picking the first Pass or the candidate
+            // with the most orig-words matched. See
+            // [VoskSpeechRecognizer.transcribeFileAlternatives] and
+            // §12.38 for the full design rationale.
+            val candidates = try {
+                voskRecognizer.transcribeFileAlternatives(path, maxAlternatives = 3).getOrElse {
+                    android.util.Log.e("SttTest", "stopStt: transcribeFileAlternatives failed", it)
+                    listOf("[识别失败: ${it.javaClass.simpleName}]")
+                }
+            } catch (e: Throwable) {
+                android.util.Log.e("SttTest", "stopStt: transcribeFileAlternatives threw", e)
+                listOf("[识别失败: ${e.javaClass.simpleName}]")
+            }
+            android.util.Log.d("SttTest", "stopStt: vosk returned ${candidates.size} candidate(s): $candidates")
+            val pickedText = pickBestCandidate(candidates)
+            android.util.Log.d("SttTest", "stopStt: picked='$pickedText'")
+            _sttTestState.value = SttTestState.Transcribed(pickedText)
         }
     }
 
-    private fun onSttResults(text: String) {
-        stopSttElapsedTimer()
-        cancelSttEventCollection()
-        _sttTestState.value = SttTestState.Transcribed(text)
+    /**
+     * (2026-07-10) Pick the best candidate from Vosk's n-best list.
+     *
+     * Strategy (in order):
+     *  1. **First PASS wins.** If any candidate passes WordMatcher
+     *     (all orig words matched), use it immediately. This is the
+     *     "happy path" — Top-3 contains the correct phrase and we
+     *     stop looking.
+     *  2. **Most orig words matched.** If nothing passes, pick the
+     *     candidate with the highest count of matched orig words
+     *     (`origMatched.count { it }`). This favors the candidate
+     *     that "got the most right" rather than the one that's just
+     *     closest in length.
+     *  3. **Closest length to orig.** Tiebreak in (2) by the absolute
+     *     length difference between `transWords.size` and `origWords.size`
+     *     — a candidate with the same word count as the expected
+     *     sentence is more likely to be "the right number of words
+     *     but wrong words" (still actionable feedback) than one that
+     *     dropped half the words.
+     *
+     * The picked **text** (not the WordMatcher result) is returned
+     * so the user sees the candidate Vosk actually recognized, with
+     * whatever errors it contains — they can then edit it in
+     * TranscriptionEditor before submission. The actual Pass/Fail
+     * verdict is still computed against the picked text in
+     * [submitTranscription].
+     *
+     * Visible for testing — kept `internal` rather than `private`
+     * so [WordMatcher.bestOf] can be exercised in isolation. The
+     * companion tests live in [com.echoling.app.speech.WordMatcherTest].
+     */
+    internal fun pickBestCandidate(candidates: List<String>): String {
+        if (candidates.isEmpty()) return ""
+        // Skip error placeholders — they're not real candidates and
+        // shouldn't influence vote. If every candidate is an error,
+        // return the first one (it'll render as "未识别" anyway).
+        val realCandidates = candidates.filter {
+            !it.startsWith("[识别失败") && it.isNotBlank()
+        }
+        if (realCandidates.isEmpty()) return candidates.first()
+        if (realCandidates.size == 1) return realCandidates.first()
+        val currentTest = _testState.value.testItems.getOrNull(_testState.value.currentTestIndex)
+            ?: return realCandidates.first()
+        return WordMatcher.bestOf(currentTest.contentEn, realCandidates)
+    }
+
+    /**
+     * Suspend until [sttResult] is filled by the event collection job,
+     * or up to 2s. Returns the result (or "" on timeout). Reads and
+     * clears [sttResult] as a side-effect.
+     *
+     * Safe to call only from [stopStt], which has already signalled
+     * end-of-input via [SttRecognizer.stop]. Both the wait loop and
+     * the event collector run on the main thread (default for
+     * viewModelScope.launch), so the read/write to [sttResult] is
+     * serialized — no extra synchronization needed.
+     */
+    private suspend fun waitForSttResult(): String {
+        val timeoutMs = 2000L
+        val start = System.currentTimeMillis()
+        while (sttResult == null && System.currentTimeMillis() - start < timeoutMs) {
+            delay(50)
+        }
+        val result = sttResult ?: ""
+        sttResult = null
+        return result
     }
 
     private fun startSttTimers() {
@@ -979,16 +1586,20 @@ class PracticeViewModel @Inject constructor(
         sttEventCollectionJob = null
     }
 
-    /** Cancel STT (user taps "取消" in overlay). */
+    /**
+     * Cancel STT (user taps "取消" in overlay, or backs out of the page).
+     * v2: stop the WavRecorder if it's running, and discard any
+     * in-flight transcribe coroutine. Doesn't touch the model cache.
+     */
     fun cancelStt() {
-        if (_sttTestState.value is SttTestState.Listening) {
-            sttRecognizer.stop()
-        }
+        try { wavRecorder.cancel() } catch (_: Throwable) {}
+        sttWaitJob?.cancel()
+        sttWaitJob = null
         stopSttElapsedTimer()
         cancelSttEventCollection()
         _sttTestState.value = SttTestState.Idle
         _sttAmplitudeBars.value = List(5) { 0.4f }
-        sttRecognizerStarted = false
+        sttResult = null
     }
 
     /** User submitted the transcription for matching. */
@@ -1000,6 +1611,10 @@ class PracticeViewModel @Inject constructor(
                     original = "",
                     origWords = emptyList(),
                     transWords = emptyList(),
+                    // (2026-06-28) Empty match arrays — there's no
+                    // orig sentence to align against in this branch.
+                    origMatched = BooleanArray(0),
+                    transMatched = BooleanArray(0),
                     reason = "no_test_item"
                 )
                 return
@@ -1014,6 +1629,12 @@ class PracticeViewModel @Inject constructor(
                 original = currentTest.contentEn,
                 origWords = result.origWords,
                 transWords = result.transWords,
+                // (2026-06-28) Pass the per-word match flags
+                // through so WordChipsRow can color each chip
+                // independently. See WordMatcher for the
+                // position-independent alignment logic.
+                origMatched = result.origMatched,
+                transMatched = result.transMatched,
                 reason = result.reason
             )
         }
@@ -1025,13 +1646,27 @@ class PracticeViewModel @Inject constructor(
         _sttAmplitudeBars.value = List(5) { 0.4f }
     }
 
-    fun playRecording() {
-        val path = _recordingPath.value ?: return
+    /**
+     * (2026-06-28) Plays a recording by file path. The caller
+     * supplies the path explicitly instead of the ViewModel
+     * reading from a shared field — this is what enforces the
+     * per-page isolation (SpeakingPage passes
+     * [speakingRecordingPath], TestingPage passes
+     * [testRecordingPath], so a speaking-page recording can never
+     * be played from the test page's "回放录音" button and vice
+     * versa).
+     *
+     * @param path the file path to play. Null / blank → no-op,
+     *        matches the old behavior so the UI can call this
+     *        unconditionally from any "播放录音" button.
+     */
+    fun playRecording(path: String?) {
+        val p = path ?: return
 
         stopPlayingRecording()
 
         mediaPlayer = MediaPlayer().apply {
-            setDataSource(path)
+            setDataSource(p)
             prepare()
             setOnCompletionListener {
                 _isPlayingRecording.value = false
@@ -1097,10 +1732,12 @@ class PracticeViewModel @Inject constructor(
         audioPlayer.release()
         videoPlayer?.release()
         voiceRecorder.release()
+        wavRecorder.release()
+        voskRecognizer.shutdown()
         stopPlayingRecording()
-        sttRecognizer.stop()
         sttElapsedJob?.cancel()
         sttEventCollectionJob?.cancel()
+        sttWaitJob?.cancel()
         saveProgress()
     }
 }

@@ -6,20 +6,25 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.AutoStories
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -34,11 +39,17 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.echoling.app.R
 import com.echoling.app.data.local.db.entity.ReciteProgressEntity
 import com.echoling.app.domain.model.DictCategory
 import com.echoling.app.presentation.ui.components.PageHeader
@@ -66,6 +77,12 @@ fun ReciteScreen(
     val uiState by viewModel.uiState.collectAsState()
 
     Scaffold(
+        // §12.30: only consume the top status-bar inset, not the bottom
+        // navigation-bar inset. The outer MainScaffold already accounts
+        // for the bottom tab bar, so a second nav-bar subtraction here
+        // would leave a 24dp page-colored strip between the tab bar
+        // and the last list item. See CLAUDE.md §12.30.
+        contentWindowInsets = WindowInsets.statusBars,
         // No topBar — the "记单词" title sits in PageHeader below (§12.18)
     ) { padding ->
         Column(
@@ -75,11 +92,32 @@ fun ReciteScreen(
         ) {
             PageHeader(
                 title = {
-                    Text(
-                        text = "记单词",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
+                    // Two-line brand bar matching the home page (Courses)
+                    // and Me tabs — Chinese title with 3sp letter-spacing
+                    // so the three characters don't visually crowd, plus
+                    // an italic English subtitle below in onSurfaceVariant.
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = stringResource(R.string.recite_title),
+                            style = TextStyle(
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 3.sp,
+                            ),
+                            maxLines = 1,
+                        )
+                        Text(
+                            text = stringResource(R.string.recite_subtitle),
+                            style = TextStyle(
+                                fontSize = 11.sp,
+                                fontStyle = FontStyle.Italic,
+                                fontWeight = FontWeight.Medium,
+                                letterSpacing = 1.sp,
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                    }
                 },
             )
             when {
@@ -143,23 +181,30 @@ private fun CategoryCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
+                // 14 → 10 dp vertical padding: 11 cards now occupy the
+                // screen instead of 5, so each card has to give back ~8dp
+                // of height to keep the picker manageable.
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Leading icon — picks one of 5 brand-coherent Material icons
-            // based on the category id. The icon tint uses primary so
-            // the card reads as "tappable action" rather than "static
-            // info panel".
+            // Leading icon — picks one of 11 brand-coherent Material icons
+            // based on the category id. (2026-07-05) Removed the
+            // primaryContainer background tint — the icon now sits in
+            // a transparent 40dp frame and tints with primary (brand
+            // purple), reading as a clean outlined glyph rather than
+            // a tinted chip. Keeps the 40dp container so the Row's
+            // vertical alignment and 12dp gap to the title don't
+            // shift.
             Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
-                modifier = Modifier.size(48.dp),
+                color = Color.Transparent,
+                modifier = Modifier.size(40.dp),
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = iconForCategory(category.id),
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        tint = MaterialTheme.colorScheme.primary,
                     )
                 }
             }
@@ -171,19 +216,35 @@ private fun CategoryCard(
                 ) {
                     Text(
                         text = category.name,
-                        style = MaterialTheme.typography.titleMedium,
+                        // titleMedium (16sp) → titleSmall (14sp):
+                        // shrunk to match the tighter card — 11 cards
+                        // now occupy the screen, so the picker has to
+                        // feel denser without losing legibility.
+                        style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        // Gray-tinted background to match the new
+                        // gray text — a purple background would look
+                        // off with a gray foreground. Same #666666
+                        // as the vocabulary translation, so the
+                        // "secondary text" color is consistent
+                        // across both screens.
+                        color = Color(0xFF666666).copy(alpha = 0.12f),
                     ) {
                         Text(
                             text = "${category.size} 词",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
+                            // §12.31c (cross-screen): primary
+                            // purple → #666666 gray. Purple used to
+                            // compete with the category name and the
+                            // leading icon; gray reads as "data" and
+                            // lets the category title stay the
+                            // focal point.
+                            color = Color(0xFF666666),
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
                         )
                     }
@@ -209,7 +270,13 @@ private fun CategoryCard(
                     Text(
                         text = progressSubline(progress, category.size),
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
+                        // §12.31c (cross-screen): primary purple →
+                        // #666666 gray, matching the vocabulary
+                        // translation and the "X 词" chip above. The
+                        // progress line is data, not action — gray
+                        // keeps it visually subordinate to the
+                        // category name.
+                        color = Color(0xFF666666),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -268,10 +335,23 @@ private fun relativeTimeAgo(epochMs: Long): String {
 }
 
 private fun iconForCategory(id: String): ImageVector = when (id) {
+    // 11-category expansion (2026-07-03) — vocab cards now span
+    // primary 小学 → cet8 → 考研 → toefl → gre / ielts / bec. Icons only
+    // use symbols confirmed resolvable in this project's
+    // `material-icons-core` set (Favorite / MilitaryTech / Language /
+    // BusinessCenter are unresolved in 1.5.4 — fall back to a smaller
+    // palette of proven icons and accept a few visual duplicates).
+    // Unknown ids still fall back to MenuBook.
+    "primary" -> Icons.Default.Star         // 小学 = 星 = 童趣
     "junior" -> Icons.Default.School
     "senior" -> Icons.Default.MenuBook
     "cet4" -> Icons.Default.MenuBook
     "cet6" -> Icons.Default.AutoStories
+    "cet8" -> Icons.Default.AutoStories
+    "kaoyan" -> Icons.Default.School
     "toefl" -> Icons.Default.Public
+    "gre" -> Icons.Default.Public
+    "ielts" -> Icons.Default.Translate
+    "bec" -> Icons.Default.Check
     else -> Icons.Default.MenuBook
 }

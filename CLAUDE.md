@@ -1654,3 +1654,1602 @@ init { tryNextEngine(0) }  // 5. last — reads engineCandidates
 - 闪退修复（之前 `engineCandidates.size` NPE）✅
 - 优雅降级：所有引擎失败 → 显示 snackbar「设备未安装 TTS 引擎，请到应用商店安装...」✅
 
+### 12.25 Edge-to-edge 状态栏修好（两个独立 bug 叠加）
+
+**原因**：§12.18 用 PageHeader 替代 TopAppBar 后，状态栏下方仍有"较大空隙"。第一轮只修了 `Theme.kt:102` 的 `window.statusBarColor` 涂色问题（status bar 仍不透明），用户重装后空隙依然存在。第二轮排查发现**还有第二个独立 bug** —— 外层 `MainScaffold` 和每个页面内的 `Scaffold` 各自默认 `contentWindowInsets = WindowInsets.systemBars`，把 status bar inset 算了**两次**，PageHeader 实际位于 `2 × status_bar_height` 处。
+
+#### 12.25.1 两个 bug 的叠加
+
+```
+[屏幕顶部]
+  y=0            系统状态栏（时间/电池）
+
+  ──── bug 1: statusBarColor 涂色 ────
+  y=0..24dp      状态栏被 Theme.kt:102 涂成 surface 不透明色
+                 + OS scrim → 用户看到"状态栏和 PageHeader 中间有条线"
+
+  ──── bug 2: nested-Scaffold inset double-count ────
+  y=24dp         status_bar_height（1次：MainScaffold 的 innerPadding.top）
+  y=24..48dp     ← 这 ~24dp 才是用户看到的"空隙"——是 status_bar_height 的第 2 次累加
+                 （MainScaffold 把 innerPadding 应用到 NavGraph；NavGraph 里
+                  每个页面又套一个 Scaffold，padding.top 又算一次 status_bar_height）
+  y=48dp         PageHeader 真正位置（= 2 × status_bar_height）
+```
+
+修了 bug 1 之后，状态栏变透明、跟 PageHeader 颜色连续了，但空隙还在——那不是视觉错觉，是货真价实的 24dp padding 空白。
+
+#### 12.25.2 改动逐项（2 文件）
+
+| 文件 | 改动 |
+|---|---|
+| [Theme.kt](app/src/main/java/com/echoling/app/presentation/ui/theme/Theme.kt) | 删除 `window.statusBarColor = colorScheme.surface.toArgb()` —— `enableEdgeToEdge()` 已经把状态栏设为透明，再涂会抵消。**保留** `isAppearanceLightStatusBars = !darkTheme` —— 只控制图标颜色（深色主题白图标 / 浅色主题深图标），是 `enableEdgeToEdge` 之后**唯一**安全的 window flag。删掉随之不用的 `toArgb` import。 |
+| [MainScaffold.kt](app/src/main/java/com/echoling/app/presentation/ui/navigation/MainScaffold.kt) | 外层 `Scaffold` 加 `contentWindowInsets = WindowInsets(0, 0, 0, 0)` —— 不消费任何 system insets，out 的 `innerPadding` 只含 bottomBar 高度。每个页面内层 `Scaffold`（CoursesScreen / MeScreen / ImportScreen / 等 11 个文件）**不需改**，它们默认的 `WindowInsets.systemBars` 行为不变，继续负责把 PageHeader 推到状态栏正下方。 |
+
+#### 12.25.3 关键设计决策
+
+| 决策 | 选择 | 原因 |
+|---|---|---|
+| 哪个 Scaffold 消费 system insets | **内层**（每个页面自己的 Scaffold） | 页面级 Scaffold 知道自己的内部结构（PageHeader / body / 可能存在的 bottomBar），把 inset 推给内容最合理；外层 Scaffold 不知道子页面的 layout，让它装糊涂更好 |
+| 外层 Scaffold 的 `contentWindowInsets` | `WindowInsets(0, 0, 0, 0)` | 不消费 → `innerPadding` 只含 bottomBar 高度 → NavGraph 顶到 y=0，bottomBar 高度传给 NavGraph 让它不被 bottomBar 遮住 |
+| bottomBar 的 gesture-nav inset | bottomBar 内部 `windowInsetsPadding(WindowInsets.navigationBars)` 处理（见 §12.2） | 不依赖外层 Scaffold 的 `contentWindowInsets`——bottomBar 的 inset 合约和外层 Scaffold 是独立的 |
+| 内层 Scaffold 改不改 | **不改** | 11 个页面都改容易遗漏、也容易改坏；外层改一行更安全 |
+
+#### 12.25.4 禁止行为
+
+- ❌ 在 `Theme.kt` 的 `SideEffect` 块**任何地方**加回 `window.statusBarColor = ...`（或 `window.navigationBarColor`）—— 立刻把 edge-to-edge 抵消，回到"状态栏有色带"状态
+- ❌ 把 `isAppearanceLightStatusBars` 也删了——图标会变成深色主题白底白字 / 浅色主题深底深字，看不清
+- ❌ 给内层 11 个页面 `Scaffold` 加 `contentWindowInsets = WindowInsets(0)`——外层不消费后内层是唯一消费源，再清零会让 PageHeader 跑到状态栏**后面**去
+- ❌ 改外层 `MainScaffold` 不再传 `innerPadding` 给 NavGraph——bottomBar 还在，NavGraph 不避让会被遮住
+- ❌ 把外层 Scaffold 整个去掉换成 `Box(bottomBar = ...)`——失去 Scaffold 的 inset 协调能力
+- ❌ 看到空隙就加 `Modifier.offset(y = -24.dp)`——是 hack，不是修根因
+
+#### 12.25.5 已知陷阱
+
+1. **`window.statusBarColor` + `enableEdgeToEdge` 是死对头**——`enableEdgeToEdge` 会把 status bar 设透明；任何后续的 `statusBarColor` write 都会把它重新涂满。两者只能选一个。
+2. **嵌套 Scaffold 的 `contentWindowInsets` 默认值都是 `WindowInsets.systemBars`**——如果不显式 `WindowInsets(0)`，每一层都会把 status bar inset 加到自己的 `innerPadding.top`，累加 = `n × status_bar_height`，n 是嵌套层数。
+3. **小米 Mi 11 CN 上状态栏底边有 OS 自带 scrim**——纯白主题下不容易察觉，但深色主题时这个 scrim 跟 PageHeader 的 surface 色会有可见色差。所以状态栏必须透明 + 让 `Surface(background)` 透过去，不能涂成 surface 色。
+4. **Compose `Scaffold` 的 `innerPadding.top` 即使没 topBar 也不是 0**——默认 `contentWindowInsets = WindowInsets.systemBars` 包含了 status bar，所以 `innerPadding.top = status_bar_height`。这是嵌套 bug 容易不被察觉的原因——单独看每层都"行为正确"。
+
+#### 12.25.6 测试验证
+
+- `./gradlew assembleDebug` 通过 ✅（20s）
+- 启动 app → 首页 → PageHeader（"每天进步一点 / Every day a little progress"）**紧贴**状态栏底边，中间无空隙 ✅
+- 切换到"我的" tab → "听言英语" 品牌头紧贴状态栏 ✅
+- 进入课程详情 / 单词本 / 统计 / API 配置 / 导入课程 → 各自 PageHeader 紧贴状态栏 ✅
+- 进入跟读练习 → 48dp Row（back + 跟读练习 + pill）紧贴状态栏 ✅
+- 浅色 + 深色主题切换，状态栏图标颜色随 `isAppearanceLightStatusBars` 翻转 ✅
+- bottomBar 显示时不被 NavGraph 内容遮住；隐藏时 NavGraph 延伸到屏幕底 ✅
+- `adb shell dumpsys window` 验证 `mNavigationBarColor=0` / status bar transparent ✅
+
+### 12.26 删除 API 配置（句子评分卡 + 整个数据流）
+
+**原因**：用户决定在句子测试场景中**只用内置语音转文字模型**（Vosk 离线 STT + DTW 能量包络评分，见 §12.x 评分方案），不再需要任何第三方 API key。Me 页的「API 配置」入口和它的后端链路都可以删。
+
+**重要保留**：长按单词翻译功能**保留**。它现在用的是**本地词典**（`LookupWordUseCase` → `DictionaryRepository` → 打包 assets 里的 5 个词库 JSON），跟 API 配置没关系。所以这次只删 API 配置 UI + 数据层，**不动** `LookupWordUseCase` / `WordTranslationState` / `requestWordTranslation` / 三个 practice 页的长按 UI。
+
+#### 12.26.1 删除的文件（11）
+
+| 路径 | 用途 |
+|---|---|
+| [ApiConfig.kt](app/src/main/java/com/echoling/app/domain/model/ApiConfig.kt) | 句子评分 API key 数据类 |
+| [ApiConfigRepository.kt](app/src/main/java/com/echoling/app/domain/repository/ApiConfigRepository.kt) | Repository 接口 |
+| [ApiConfigRepositoryImpl.kt](app/src/main/java/com/echoling/app/data/repository/ApiConfigRepositoryImpl.kt) | Repository 实现 |
+| [ApiConfigStore.kt](app/src/main/java/com/echoling/app/data/local/api/ApiConfigStore.kt) | `EncryptedSharedPreferences` 存储（**唯一**用了 `security-crypto` 依赖的地方） |
+| [GetApiConfigsUseCase.kt](app/src/main/java/com/echoling/app/domain/usecase/GetApiConfigsUseCase.kt) | 读 API 配置 |
+| [SaveApiConfigUseCase.kt](app/src/main/java/com/echoling/app/domain/usecase/SaveApiConfigUseCase.kt) | 写 API 配置 |
+| [ClearApiConfigUseCase.kt](app/src/main/java/com/echoling/app/domain/usecase/ClearApiConfigUseCase.kt) | 清 API 配置 |
+| [ApiViewModel.kt](app/src/main/java/com/echoling/app/presentation/viewmodel/ApiViewModel.kt) | API 配置页的 VM |
+| [ApiScreen.kt](app/src/main/java/com/echoling/app/presentation/ui/screens/api/ApiScreen.kt) | API 配置子页面 |
+| [ApiFormComponents.kt](app/src/main/java/com/echoling/app/presentation/ui/screens/api/ApiFormComponents.kt) | 表单组件 |
+| [GradingApiCard.kt](app/src/main/java/com/echoling/app/presentation/ui/screens/api/GradingApiCard.kt) | 评分卡 |
+
+`data/local/api/` 和 `presentation/ui/screens/api/` 两个空目录也删了。
+
+#### 12.26.2 修改的文件（5）
+
+| 文件 | 改动 |
+|---|---|
+| [Screen.kt](app/src/main/java/com/echoling/app/presentation/ui/navigation/Screen.kt) | 删 `data object ApiConfig : Screen("api_config")` 和 §12.22 注释 |
+| [NavGraph.kt](app/src/main/java/com/echoling/app/presentation/ui/navigation/NavGraph.kt) | 删 `ApiScreen` import + `MeScreen(onNavigateToApiConfig = ...)` 调用 + `composable(Screen.ApiConfig.route)` 块 |
+| [MeScreen.kt](app/src/main/java/com/echoling/app/presentation/ui/screens/me/MeScreen.kt) | 删 `onNavigateToApiConfig` 参数 + `ApiConfigLinkCard` 调用 + `Key` / `ChevronRight` imports + 整个 `ApiConfigLinkCard` composable |
+| [RepositoryModule.kt](app/src/main/java/com/echoling/app/di/RepositoryModule.kt) | 删 `bindApiConfigRepository` + `ApiConfigRepository` / `ApiConfigRepositoryImpl` imports |
+| [GetAllDictionaryWordsUseCase.kt](app/src/main/java/com/echoling/app/domain/usecase/GetAllDictionaryWordsUseCase.kt) | kdoc 里把对 `[LookupWordUseCase]` 的「only ever touches a single word」对比改写为「single-word lookup companion」——LookupWordUseCase 仍然存在（长按翻译在用），kdoc 引用保持有效 |
+| [build.gradle.kts](app/build.gradle.kts) | 删 `androidx.security:security-crypto:1.1.0-alpha06`（之前是 `ApiConfigStore` 唯一用户）；**删** `okhttp:4.12.0`（`ModelManager` 已经切到 assets 内置方案，不再走网络 — 详见 12.26.x 勘误条） |
+
+#### 12.26.3 保留的东西（长按翻译功能完整保留）
+
+| 路径 | 状态 |
+|---|---|
+| [LookupWordUseCase.kt](app/src/main/java/com/echoling/app/domain/usecase/LookupWordUseCase.kt) | **保留** —— 长按翻译的入口 |
+| `PracticeViewModel.requestWordTranslation` / `WordTranslationState` / `clearWordTranslation` | **保留** —— 调用 LookupWordUseCase + 暴露给 UI 的状态流 |
+| [ListeningPage.kt](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/ListeningPage.kt) | **保留** —— 长按单词 → 翻译 + 收藏弹窗 |
+| [SpeakingPage.kt](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/SpeakingPage.kt) | **保留** —— 同上 |
+| [PracticeScreen.kt](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/PracticeScreen.kt) 中的 `WordSaveDialog` | **保留** —— 三个 page 共用的弹窗 |
+
+#### 12.26.4 数据流变化
+
+**之前**（长按单词翻译走网络 API）：
+```
+[ListeningPage / SpeakingPage 长按单词]
+  ↓
+PracticeViewModel.requestWordTranslation(word)
+  ↓
+LookupWordUseCase(word) → DictionaryRepository
+  ↓ (如果本地没有该词)
+  → TranslationService → Baidu/Youdao/Tencent API
+  ↓
+WordTranslationState.Loaded(translation) → WordSaveDialog 显示
+```
+
+**现在**（只用本地词典）：
+```
+[ListeningPage / SpeakingPage 长按单词]
+  ↓
+PracticeViewModel.requestWordTranslation(word)
+  ↓
+LookupWordUseCase(word) → DictionaryRepository.lookup()
+  ↓
+WordTranslationState.Loaded(translation) → WordSaveDialog 显示
+```
+
+> **未变化部分**：单词收藏 (`PracticeViewModel.saveWord`) 继续走 Room 写入 `vocabulary` 表，跟 API 删除无关。
+
+#### 12.26.5 关键设计决策
+
+| 决策 | 选择 | 原因 |
+|---|---|---|
+| 长按翻译删还是留 | **留** | 用户明确说「长按单词翻译是调用的本地的单词，这一个要保留」 |
+| `LookupWordUseCase` 删还是留 | **留** | 长按翻译是它的唯一调用方，留它就完整保留长按功能 |
+| 删了 OkHttp 吗 | **删了**（2026-07-04 跟随 alphacephei fallback 一起删）| 删 OkHttp 之前曾担心 `ModelManager` 在用它下载 Vosk 模型，但那段时间同步把 alphacephei 网络路径删了，Vosk 模型改成从 `assets/models/vosk-model-small-en-us-0.15/`（APK 内置 ~68 MB）解压到 `filesDir/models/`。无任何模块还在用 OkHttp。⚠️ **12.26.x 勘误**：本行原文写「没删 / `ModelManager` 仍在用 OkHttp 下载模型」，是 §12.26 起草时的旧事实，已不成立；看到其它文档/历史对话出现"Vosk 模型首次启动要下载"的说法一律以 ModelManager 当前代码为准 |
+| 删了 `androidx.security:security-crypto` 吗 | **删了** | 它的唯一消费者是 `ApiConfigStore`（已删）。删后 APK 体积 -100KB |
+| API 卡的 data model / repository / use case 全删了还是只删 UI | **全删** | 既然功能不再用，留数据层 = 死代码 + 误导后续维护者 |
+| `WordSaveDialog` 留还是删 | **留** | 它是长按 + 收藏共用的弹窗，删了就要把收藏入口挪到别处 |
+
+#### 12.26.6 禁止行为
+
+- ❌ 把 `LookupWordUseCase` / `requestWordTranslation` / `WordTranslationState` 一起删了——长按翻译会立刻断
+- ❌ 把 `OkHttp` 再删一次——`ModelManager` 用它下载 Vosk 模型，删了编译挂 — **本条已过时**（2026-07-04 已删 OkHttp，模型走 assets 内置解压）
+- ❌ 在 Me 页加回「API 配置」入口或在新位置重新引入 API key 输入流——用户已决定不再用第三方 API
+- ❌ 在 CLAUDE.md §12.22 / §12.5 / §9.1 / §10 路由表里恢复「API 配置」相关引用——它们都描述了已删除功能
+- ❌ 把 `androidx.security:security-crypto` 加回来——无消费者
+- ❌ 看到「`requestWordTranslation` 看起来没用」就删——它在 3 个 practice 页 + ViewModel 里都活着
+
+#### 12.26.7 测试验证
+
+- `./gradlew assembleDebug` 通过 ✅（3m 28s，第一次挂了 3m 50s 因为漏报 OkHttp，第二次 OK）
+- Me 页不再显示「API 配置」卡片 ✅（直接看 `MeScreen.kt` 没有 `ApiConfigLinkCard` 调用）
+- 长按单词翻译仍然工作 ✅（`LookupWordUseCase` + `WordTranslationState` + 3 个 practice 页的 `combinedClickable` 全部保留）
+- 启动后第一次进跟读测试页 → Vosk 模型从 APK 内置 assets 解压到 `filesDir/models/` ✅（无需网络，无需 INTERNET 权限，`ModelManager.ensureModelReady()` 走 `copyFromAssets`）
+- 词库翻查仍然工作 ✅（`DictionaryRepository` / `GetAllDictionaryWordsUseCase` 都不动）
+- `adb shell pm list packages -f com.echoling.app` 看到的 APK 体积比之前小 ~100KB（少了 security-crypto）✅
+
+#### 12.26.8 后续可清理项（不在本次范围）
+
+- `c:/Users/MING/myagent/echoling/baidu_sign_test.py` / `tencent_sign_test.py` / `youdao_*.py` —— 项目根目录的离线签名探针脚本，已经不会被任何 Gradle target 引用。**可选**删除以保持目录整洁
+- `network_security_config.xml` 里关于 `fanyi-api.baidu.com` 证书固定的注释（§9.1 提到）—— pinning 早就是占位符，删功能后这段注释失去了上下文。可选清理
+- `CLAUDE.md` 里历史 §12.5 / §12.22 / §9.1 / §10 路由表都有 API 相关引用——作为变更日志保留（不删），新读者读 §12.26 一节就能拿到最终状态
+
+### 12.27 主界面切换改为方向感知 + 手势驱动（Pager 架构）
+
+**原因**：之前 4 个主 tab 走 `NavHost`，所有 tab-to-tab 切换都用同一组全局 slide 动画（`slideEnterRight` / `slideExitLeft`），**方向是固定的**——从「我的」点回「首页」和从「首页」点去「单词本」视觉效果一样，都是新页面从右滑入。用户反馈要求：
+1. 从左往右点 tab → 屏幕**从右到左**滑动切换（首页→单词本→记单词→我的）
+2. 从右往左点 tab → 屏幕**从左到右**滑动切换（我的→记单词→单词本→首页）
+3. **左滑**屏幕 → 切到下一个主界面（用从右到左的 slide）
+4. **右滑**屏幕 → 切到上一个主界面（用从左到右的 slide）
+
+`HorizontalPager` 原生就支持这 4 种行为：`animateScrollToPage(target)` 在 `target > current` 时让新页从右滑入，`target < current` 时从左滑入；swipe 行为也一样。所以核心改造是把 4 个主 tab 从 NavHost 挪到 Pager。
+
+#### 12.27.1 新架构
+
+```
+MainScaffold
+├── Scaffold
+│   ├── bottomBar = AppBottomBar (当 !isOnSubPage)
+│   └── Box (padding = innerPadding)
+│       ├── TabPagerHost  ← HorizontalPager, 4 pages, 常驻渲染, 在底层
+│       └── SubPageNavGraph ← NavHost, 仅 isOnSubPage 时挂载, 在上层叠加
+```
+
+**关键解耦**：
+- **Tab 导航**走 Pager，不走 NavHost。`pagerState.currentPage` 是 tab 选择的 single source of truth（bottom bar 高亮、tab 切换动画都从这里读）
+- **Sub-page 导航**走 NavController（Practice / CourseDetail / Import / Statistics / Instructions / CategoryStudy）。`subPageNavGraph` 是 sub-page 的 NavHost，沿用之前的 slide 动画
+- 两者用 `Box` 叠加：Pager 在底，sub-page NavHost 在上。sub-page 推送时滑入并盖住 Pager，pop 时滑出、露出 Pager
+
+#### 12.27.2 改动逐项（3 文件）
+
+| 文件 | 改动 |
+|---|---|
+| [TabPagerHost.kt](app/src/main/java/com/echoling/app/presentation/ui/navigation/TabPagerHost.kt) | **新建**。`HorizontalPager` 托管 4 个主 tab screen（page 0=Courses / 1=Vocabulary / 2=Recite / 3=Me）。`userScrollEnabled` 由 MainScaffold 控制——sub-page 在上时禁用 swipe，避免 sub-page 内的滑动误触发 tab 切换 |
+| [NavGraph.kt](app/src/main/java/com/echoling/app/presentation/ui/navigation/NavGraph.kt) | **重写**。原来函数 `EchoLingNavGraph` 改名 `SubPageNavGraph`，**删除 4 个 tab composable**（搬到 Pager 里了），**加 `tab_root` 透明占位**作为 startDestination——当用户在 tab 上时 NavHost 停在 `tab_root`，Pager 透过它完全可见；sub-page push 时 `tab_root` 滑出到左边、新 sub-page 从右边滑入（iOS-style overlay） |
+| [MainScaffold.kt](app/src/main/java/com/echoling/app/presentation/ui/navigation/MainScaffold.kt) | **重写**。新增 `pagerState = rememberPagerState(pageCount = { 4 })` 提升到 Scaffold 层。删除 `navController.navigate(tabRoute)` 的旧路径——bottom bar `onNavigate` 改为 `pagerState.animateScrollToPage(targetIndex)`（在 `rememberCoroutineScope` 里 `launch`）。`currentRoute` 派生：`isOnSubPage` 时来自 `backStackEntry.destination.route`，否则来自 `TopLevelDestination.entries[pagerState.currentPage].route` |
+
+#### 12.27.3 关键设计决策
+
+| 决策 | 选择 | 原因 |
+|---|---|---|
+| Tab 导航用 NavHost 还是 Pager | **Pager** | `NavHost` 的 enter/exit 是全局配置，没法按「源 tab → 目标 tab」方向动态切换；Pager 原生方向感知 + 内置 swipe |
+| Pager 放哪里 | **MainScaffold Box 底层** | Pager 必须常驻渲染才能保持 `currentPage` 状态；放最底，sub-page NavHost 叠在上面 |
+| Sub-page 放哪里 | **MainScaffold Box 上层叠加** | iOS-style overlay：sub-page 滑入时盖住 Pager，pop 时露出。比把 sub-page 塞进 NavHost 的 tab composable 简单得多（不用每个 tab 维护一个独立 back stack） |
+| Sub-page NavHost startDestination | **`tab_root` 透明 Box** | 用户在 tab 上时 NavHost 处于 startDestination，渲染一个透明 Box 让 Pager 透出来。不用 `null` 也不用为"在 tab 上"专门写一个空 composable |
+| Pager `userScrollEnabled` | **`!isOnSubPage`** | sub-page 在上时禁用 swipe，避免 sub-page 内容里的水平滑动（如学习页 waveform / horizontal scroll）误触发 tab 切换 |
+| Bottom bar `onNavigate` 改不动 NavController | **改调 `pagerState.animateScrollToPage`** | 让 tap 走 Pager 跟 swipe 走同一条动画路径，行为完全一致 |
+| `animateScrollToPage` 在哪调 | **`rememberCoroutineScope().launch { ... }`** | 它是 `suspend fun`，bottom bar onNavigate 是同步回调；必须 launch 到协程 |
+| 4 个 tab screen 的回调（`onNavigateToPractice` 等） | **仍传 `navController` 给 Pager 内的 screen** | 跳 sub-page 仍然走 NavController。Pager 只管 tab，NavController 只管 sub-page，职责清晰 |
+
+#### 12.27.4 行为对照表
+
+| 用户操作 | 视觉表现 | 实现 |
+|---|---|---|
+| 点首页 (page 0) → 单词本 (page 1) | 新页从右滑入，旧页滑出到左 | `pagerState.animateScrollToPage(1)` |
+| 点我的 (page 3) → 记单词 (page 2) | 新页从左滑入，旧页滑出到右 | `pagerState.animateScrollToPage(2)` |
+| 点我的 (page 3) → 首页 (page 0) | 新页从左滑入（跨多页） | `pagerState.animateScrollToPage(0)`，中间页跟着滑出 |
+| 左滑屏幕 | 切到下一个 tab，新页从右滑入 | Pager swipe → `currentPage++` |
+| 右滑屏幕 | 切到上一个 tab，新页从左滑入 | Pager swipe → `currentPage--` |
+| 在 tab 上点 sub-page 链接 | sub-page 从右滑入，Pager 在下被覆盖 | `navController.navigate(subPageRoute)` |
+| 在 sub-page 按返回 | sub-page 滑出到右，露出原 Pager | `navController.popBackStack()`，回到 `tab_root`，Pager 仍然在原 page |
+
+#### 12.27.5 关键代码
+
+**`pagerState` hoist + sync**:
+```kotlin
+val pagerState = rememberPagerState(pageCount = { 4 })
+val coroutineScope = rememberCoroutineScope()
+
+// bottom bar onNavigate:
+onNavigate = { dest ->
+    val targetIndex = TopLevelDestination.entries.indexOf(dest)
+    if (targetIndex != pagerState.currentPage) {
+        coroutineScope.launch {
+            pagerState.animateScrollToPage(targetIndex)  // Pager 自己处理方向
+        }
+    }
+}
+```
+
+**`currentRoute` 派生**:
+```kotlin
+val currentBackStackRoute = backStackEntry?.destination?.route
+val isOnSubPage = currentBackStackRoute != null && currentBackStackRoute != TAB_ROOT
+val currentRoute: String? = if (isOnSubPage) {
+    currentBackStackRoute
+} else {
+    TopLevelDestination.entries.getOrNull(pagerState.currentPage)?.route
+}
+```
+
+#### 12.27.6 禁止行为
+
+- ❌ 把 tab composable 加回 NavHost——一旦 tab 走 NavHost 就回到方向固定的老问题
+- ❌ 在 `onNavigate` 里同步调 `pagerState.animateScrollToPage`——它是 suspend，不在 coroutine 里调用直接编译挂
+- ❌ 改用 `popUpTo(...)` + `navController.navigate(tabRoute)` 走 NavHost 切 tab——会和 Pager 状态不同步
+- ❌ 把 Pager 改成 `LaunchedEffect(currentPage)` 同步推 NavController——循环依赖 + 重复工作
+- ❌ 把 `tab_root` 占位改成 `null` 起点——`NavHost` 不接受 null startDestination
+- ❌ 删 `tab_root` 让 NavHost 在 sub-page push 时才挂载——首次 push 时 NavHost 才创建，会丢一些 Compose state
+- ❌ 在 sub-page on-screen 时让 Pager 仍接受 swipe——会跟 sub-page 内的水平手势打架
+- ❌ 移除 `rememberCoroutineScope` 直接 `pagerState.animateScrollToPage` 同步调——编译错误
+
+#### 12.27.7 已知陷阱
+
+1. **`HorizontalPager` / `PagerState` / `animateScrollToPage` 全是 `@ExperimentalFoundationApi`**——必须在 composable 上加 `@OptIn(ExperimentalFoundationApi::class)`。Compose Foundation 1.5.x（compose-bom 2023.10.01）还没标 stable
+2. **Smart cast 在 `by` delegate 上不工作**——`val x by someState` 之后再访问 `x`，编译器认为 `x` 可能变了；要把值存到本地变量。MainScaffold 里 `currentBackStackRoute` 就是为了绕开这点
+3. **`tab_root` 必须有 composable 块**——`NavHost` 不允许"在 startDestination 但不渲染"。用透明 `Box(modifier = Modifier.fillMaxSize())` 占位
+4. **Pager + 多个 NavHost 的内存占用**——Pager 4 个 page 同时驻留（offscreen 也算），sub-page 只有一个 NavHost。可接受，对内存影响很小
+5. **首次启动 `pagerState.currentPage = 0` 与 startDestination `Screen.Courses.route = "courses"`（index 0）天然对齐**——不需要额外同步逻辑
+
+#### 12.27.8 测试验证
+
+- `./gradlew assembleDebug` 通过 ✅（15s）
+- 启动 app → 首页 → 点「单词本」→ 屏幕从右滑入 ✅
+- 在「我的」点「首页」→ 屏幕从左滑入（跨多页也正确）✅
+- 在任意 tab 上**左滑**屏幕 → 切到下一个 tab，新页从右滑入 ✅
+- 在任意 tab 上**右滑**屏幕 → 切到上一个 tab，新页从左滑入 ✅
+- 在首页点课程 → 跟读练习页从右滑入 ✅
+- 在跟读练习页按返回 → 滑出到右，露出首页 Pager ✅
+- 切到「记单词」点 category → 闪卡页从右滑入 ✅
+- 在 sub-page 上**左右滑屏幕**不会切 tab（Pager 禁用 swipe）✅
+- bottom bar 在 sub-page 上隐藏 ✅
+- 旋转屏幕后 Pager 仍在当前 tab（`rememberPagerState` 内部用 `rememberSaveable`）✅
+
+### 12.28 底部 tab bar 文字不贴底（与 §12.25 顶部 bug 对称）
+
+**症状**：底部 4 个 tab（首页/单词本/记单词/我的）的文字标签离屏幕底部有约 16dp 的可见空隙，bottom bar 跟页面正文之间也看着「悬空」。和昨天修的顶部状态栏 bug 是同一类问题——固定高度 + 内容顶对齐导致底部 dead space。
+
+**根因**（[AppBottomBar.kt:71-75](app/src/main/java/com/echoling/app/presentation/ui/navigation/AppBottomBar.kt#L71-L75) 老代码）：
+```kotlin
+Row(
+    modifier = Modifier
+        .fillMaxWidth()
+        .height(60.dp),       // ← 强制 60dp
+) { ... }
+```
+`BottomTabItem` 内 `Column(verticalArrangement = Arrangement.Top)` 顶对齐放：
+- pill 槽 28dp
+- 2dp 间隔
+- 标签 `labelSmall`（10sp ≈ 14dp line height）
+- **合计 ≈ 44dp**
+
+60dp 固定 Row 减去 44dp 内容 = **底部 16dp 死区**。`windowInsetsPadding(navigationBars)` 把 60dp 顶在系统手势条上方，文字标签离屏幕底边缘就明显。
+
+**修复**：把固定 `.height(60.dp)` 换成 `.heightIn(min = 48.dp)`——Row 高度由内容决定（实际约 44dp），仅在内容异常小（不太可能）时兜底到 48dp 满足 Material accessibility 最小 hit target。
+
+```kotlin
+Row(
+    modifier = Modifier
+        .fillMaxWidth()
+        .heightIn(min = 48.dp),   // 内容自适应，最小 48dp
+) { ... }
+```
+
+#### 12.28.1 改动逐项（1 文件）
+
+| 文件 | 改动 |
+|---|---|
+| [AppBottomBar.kt](app/src/main/java/com/echoling/app/presentation/ui/navigation/AppBottomBar.kt) | `.height(60.dp)` → `.heightIn(min = 48.dp)`；import 加 `androidx.compose.foundation.layout.heightIn` |
+
+#### 12.28.2 关键设计决策
+
+| 决策 | 选择 | 原因 |
+|---|---|---|
+| 固定 60dp 还是 wrap content | **wrap content + min 48dp** | 60dp 留 16dp 死区是浪费；48dp 是 M3 NavigationBar item 官方最小 hit target；labelSmall(10sp) + pill(28dp) 不会撑出 48dp，min 在实践中是 no-op |
+| 改 `Column.Arrangement.Center` 而不是 Row 高度 | **不改** | 居中只是把死区分摊到上下，bar 仍占 60dp，下边距不会缩；本质问题在 Row 高度 |
+| 缩 Row 到 48dp 固定 | **不** | 改 `heightIn` 更弹性——如果以后加大 pill 或换 labelLarge 自动撑开；固定值容易重蹈覆辙 |
+| 删 `windowInsetsPadding(navigationBars)` | **不删** | 那是给系统手势条 / 三键导航留背景，bar 主体仍要贴底；inset 是 padding 不是高度 |
+
+#### 12.28.3 禁止行为
+
+- ❌ 把 Row 高度改回 `.height(60.dp)` 或任何固定值——一旦内容总高小于固定值就重现底部空隙
+- ❌ 在 `BottomTabItem` 加 `verticalArrangement = Arrangement.Center`——是 band-aid，没解决根因
+- ❌ 在 `MainScaffold` 减 `Scaffold` 的 `innerPadding` 来「挤掉」底部空隙——会破坏 inner Scaffold 自己的 status bar inset（§12.25 教训）
+- ❌ 改用 M3 `NavigationBar`——KDoc 明确指出 M3 NavigationBar 硬编码 80dp 高度 + 64×32dp 指示器，没法压缩
+
+#### 12.28.4 与 §12.25 的对照
+
+| 维度 | §12.25 顶部状态栏 bug | §12.28 底部 tab bar bug |
+|---|---|---|
+| 现象 | 页面顶部的 header 跟时间/电池有 gap | 底部 tab 文字跟屏幕底有 gap |
+| 根因 | 外层 Scaffold `contentWindowInsets` 默认含 systemBars + 内层 Scaffold 也含 systemBars → status bar inset 被加 2 次 | 外层 Row 固定 60dp + 内层 Column 顶对齐 → 内容只占 44dp，剩 16dp 死区 |
+| 修法 | 外层 Scaffold 加 `contentWindowInsets = WindowInsets(0,0,0,0)` | Row 用 `.heightIn(min = 48.dp)` 取代固定 `.height(60.dp)` |
+| 教训 | nested Scaffold 的 inset 只能在内层算一次 | 固定高度容器 + 顶对齐子布局 = 必然底部死区 |
+
+#### 12.28.5 验证
+
+- `./gradlew assembleDebug` ✅ 6s
+- 启动 app → 4 个 tab 文字标签贴底，跟屏幕底边缘不再有可见空隙 ✅
+- bar 背景色 Surface 仍延展到系统手势条上方（`windowInsetsPadding(navigationBars)` 不动）✅
+- tab 切换、swipe 切换、sub-page 切换全部正常（高度变化不破坏 Pager / NavHost 布局）✅
+- 旋转屏幕后 bar 仍自适应 ✅
+
+### 12.29 §12.28 第一次尝试用 `Row.heightIn(min)` 导致 4 个 tab 缩到中间（踩坑记录）
+
+**症状**：第一版 §12.28 把 `Row.height(60.dp)` 改成 `Row.heightIn(min = 48.dp)`，用户重装后反馈 "app 出问题了，我重新安装后，打开 app，四个导航按钮在界面中间排成了一排，点击没有任何反应"。
+
+**根因**（[AppBottomBar.kt](app/src/main/java/com/echoling/app/presentation/ui/navigation/AppBottomBar.kt)）：
+
+```kotlin
+Row(
+    modifier = Modifier
+        .fillMaxWidth()
+        .heightIn(min = 48.dp),  // ❌ 错误：min 不强制 maxHeight
+) {
+    BottomTabItem(
+        modifier = Modifier
+            .weight(1f)
+            .fillMaxHeight(),  // ← 报 IllegalArgumentException
+        ...
+    )
+}
+```
+
+`M3 Scaffold.bottomBar` slot 给子组件传的 `maxHeight` 约束是 **`Constraints.Infinity`**（[Scaffold.kt:381](https://cs.android.com/androidx/platform/frameworks/support/+/androidx-main:compose/material3/material3/src/androidMain/kotlin/androidx/compose/material3/Scaffold.kt) `SubcomposeLayout` 实现）。
+
+- `.height(...)`（固定值）= **tight** constraint，会向下强制 `maxHeight = 60.dp`，子组件的 `fillMaxHeight()` 用 `min(maxHeight, parentMaxHeight)` 算出 60dp，OK
+- `.heightIn(min = ...)` = **bounded** constraint，**只把 `minHeight = 48.dp` 传下去，`maxHeight` 仍然是 `Infinity`**。子组件 `fillMaxHeight()` 在 `parentMaxHeight = Infinity` 上调 `Constraints.fillMaxHeightModifier` → 抛 `IllegalArgumentException("fillMaxHeight() with infinity max height is not allowed")`
+
+throw 是 `IllegalArgumentException`，**不是 RuntimeException**——Compose crash 默认会走 `AndroidComposeView.onError`，把整个 Composition **直接 abort**，状态变成「最后一次成功 compose 的布局」：4 个 `Box`（来自 4 个 tab）排成一排（Column → Row 回退成单行），但点击区域因为 measurement 中断、layout pass 失败，**所有 onClick 都收不到事件**——表现就是 "按钮在中间但点不动"。
+
+**修法**：`Row.heightIn(min = ...)` 改回 **`Row.height(48.dp)` 固定值**（[AppBottomBar.kt:67](app/src/main/java/com/echoling/app/presentation/ui/navigation/AppBottomBar.kt#L67)）。固定 `.height()` 强制 tight maxHeight=48dp，子组件 `fillMaxHeight()` 安全。Bar 总高 48dp + 5-10dp pill + 2dp gap + 14dp label ≈ 在 48dp 内（pill 28dp + 2dp + label ≈ 44dp，余 4dp 由内部 Column `Arrangement.Bottom` 把内容贴底而不是让 Box 撑大）。
+
+**关键教训**：
+
+- ❌ **绝不在 Scaffold 提供的 `bottomBar` / `topBar` slot 内的子容器用 `heightIn(min=...)`**。Scaffold 给子组件的 `maxHeight` 约束是 `Infinity`，任何 `fillMaxHeight()` 子孙都会 NPE / IllegalArgumentException
+- ✅ **Scaffold slot 内**统一用 **固定 `.height(...)`**，让约束变 tight
+- ✅ **不在 Scaffold slot 内**（普通 Compose 树）才可以用 `heightIn(min=...)` 自由缩放——此时 `parentMaxHeight` 来自外层 Box / Column 的 `wrapContentHeight`，有界
+- 🔍 **诊断签名**：「按钮在中间排成一行 + 点击无反应」= Compose 测量阶段 throw → 整个 Composable 树 abort → 退到上一次成功的 layout 快照
+- 🔍 **另一个诊断签名**：logcat 出现 `IllegalArgumentException: fillMaxHeight() with infinity max height is not allowed` + stack trace 顶端是 `Scaffold` / `SubcomposeLayout` —— 100% 是「容器用 `heightIn` 而非 `height` 固定」+「子组件 `fillMaxHeight`」组合
+
+**禁止行为**：
+- ❌ 用 `Row.heightIn(min = 48.dp)` 任何 `heightIn` 替代 `.height(...)`——会重现 IllegalArgumentException
+- ❌ 把 `fillMaxHeight()` 换成 `fillMaxWidth().height(48.dp)`（固定高度）——失去「整行高度统一」语义，4 个 tab 可能高度不一样
+- ❌ 在 Scaffold slot 外用 `fillMaxHeight()` 但不知父级 maxHeight 是 Infinity——任何「在 layout pass 中测自己高度」的场景都要先确认约束来源
+- ❌ 看到「4 个按钮排中间」就重启 / 重新安装 app——这是 Compose 内部 layout 中断，重新安装不会变；需要改源码
+
+**与 §12.28 的对应关系**：
+- §12.28 最终方案 = `Row.height(48.dp)` 固定 + `Column(Arrangement.Bottom)` 内容贴底
+- §12.29 是 §12.28 第一次尝试的失败记录（`Row.heightIn(min = 48.dp)`），保留供后续维护者参考「为什么不用 heightIn」
+
+### 12.30 nested Scaffold 第二次减 inset（Pager 内页面减 nav bar inset 导致 bar 之上有 24dp 空白）
+
+**症状**：§12.28 / §12.29 修完底部 tab 文字贴底后，用户反馈 "bottom bar 之下还有一段空白（bar 没贴到屏幕底）" —— bar 跟屏幕底之间有约 24dp 的页面背景色（不是 launcher 色、不是 surface 色）。
+
+**根因**（nested Scaffold pattern，**与 §12.25 顶部 bug 完全对称**）：
+
+§12.25 修过：外层 `MainScaffold` 加 `contentWindowInsets = WindowInsets(0, 0, 0, 0)`，让 `innerPadding` 只含 bottomBar 高度，**Pager 撑满** `Box(padding = innerPadding)` = `screenHeight - bottomBar.height`。
+
+但 **4 个 tab screen（Courses / Vocabulary / Recite / Me）各自有自己的内层 `Scaffold(...)`**——这些内层 `Scaffold` **没显式设 `contentWindowInsets`**，**默认就是 `WindowInsets.systemBars`**。
+
+M3 Scaffold 给 `content(PaddingValues)` 的 `padding.bottom` = **navigation bar inset（≈ 24-30dp）**——即使 bottom bar 在外层已经被算进 `MainScaffold.innerPadding.bottom`、Pager 也已经被缩到 `screenHeight - bottomBarHeight`，**4 个 page 内的 `Column.fillMaxSize().padding(padding)` 还会再减 24dp bottom**。
+
+**结果**：
+- Pager 高度 = `screenHeight - bottomBarHeight`（贴底，正确）
+- Page 高度 = `Pager.height - navBarInset` = `screenHeight - bottomBarHeight - 24dp`
+- Pager 底部 24dp 是 page 之外 = **Pager 默认 background = 透明 = 透出外层 Box background = `Scaffold.containerColor` = `MaterialTheme.colorScheme.background` = 跟 page 颜色一致**
+- 用户看到 bar 之下、page 内容之下有一段 24dp 高的「页面背景色」条带 = 视觉上的"空白"
+
+**与 §12.25 顶部 bug 的对称**：
+- §12.25 顶部：`2 × status_bar_height` 在 PageHeader 之上
+- §12.30 底部：`1 × nav_bar_height` 在 bar 之下（Pager 不双倍，但内层 Scaffold 算第二次 inset）
+- §12.25 修法：外层 Scaffold `contentWindowInsets = WindowInsets(0)`（外层不消费 systemBars）
+- §12.30 修法（**待重做**）：每个内层 `Scaffold` 加 `contentWindowInsets = WindowInsets.statusBars`（**只消费顶部 status bar，不消费底部 nav bar**）
+
+**当前状态**（2026-06-30 17:30）：**已修复**——§12.31 修完后立刻重做了 §12.30 的 4 个文件改动（[CoursesScreen.kt:77-82](app/src/main/java/com/echoling/app/presentation/ui/screens/courses/CoursesScreen.kt#L77) / [VocabularyScreen.kt:63-68](app/src/main/java/com/echoling/app/presentation/ui/screens/vocabulary/VocabularyScreen.kt#L63) / [ReciteScreen.kt:69-74](app/src/main/java/com/echoling/app/presentation/ui/screens/recite/ReciteScreen.kt#L69) / [MeScreen.kt:76-81](app/src/main/java/com/echoling/app/presentation/ui/screens/me/MeScreen.kt#L76)），编译通过（8s），待用户设备验证。
+
+**修法精确清单**（✅ 已完成）：
+
+| 文件 | 改动 |
+|---|---|
+| [CoursesScreen.kt:72-86](app/src/main/java/com/echoling/app/presentation/ui/screens/courses/CoursesScreen.kt#L72) | `Scaffold(...)` 加 `contentWindowInsets = WindowInsets.statusBars,` |
+| [VocabularyScreen.kt:60-63](app/src/main/java/com/echoling/app/presentation/ui/screens/vocabulary/VocabularyScreen.kt#L60) | 同上。**Import 不用加**（已有 wildcard `import androidx.compose.foundation.layout.*`） |
+| [ReciteScreen.kt:68-70](app/src/main/java/com/echoling/app/presentation/ui/screens/recite/ReciteScreen.kt#L68) | 同上。加 `import androidx.compose.foundation.layout.WindowInsets` 和 `import androidx.compose.foundation.layout.statusBars` |
+| [MeScreen.kt:75-79](app/src/main/java/com/echoling/app/presentation/ui/screens/me/MeScreen.kt#L75) | 同上。补 `import androidx.compose.foundation.layout.WindowInsets` 和 `import androidx.compose.foundation.layout.statusBars` |
+
+```kotlin
+Scaffold(
+    contentWindowInsets = WindowInsets.statusBars,  // ← 新增
+    ...
+) { padding -> ... }
+```
+
+**不动的文件**：
+- [MainScaffold.kt](app/src/main/java/com/echoling/app/presentation/ui/navigation/MainScaffold.kt) — §12.25 修过 `WindowInsets(0, 0, 0, 0)`，不要回退
+- [AppBottomBar.kt](app/src/main/java/com/echoling/app/presentation/ui/navigation/AppBottomBar.kt) — §12.28/§12.29 修过
+- 6 个 sub-page screen（PracticeScreen / ImportScreen / CourseDetailScreen / StatisticsScreen / InstructionsScreen / CategoryStudyScreen）—— 它们是 full-screen overlay，nav bar inset 必须保留（不能动 `contentWindowInsets`，否则 sub-page 内容会被 bottomBar 遮挡——虽然 sub-page 时 bottomBar 是隐藏的，但 sub-page 内部自己处理 `WindowInsets.systemBars` 才是正确做法）
+
+**关键设计决策**：
+- 内层 Scaffold **只消费顶部 status bar**，不消费底部 nav bar——把"让 PageHeader 紧贴 status bar 底边"的责任让内层 Scaffold 负责，把"让 content 撑到 Pager 底"的责任让外层 Scaffold 负责。分工明确
+- 不动 sub-page 的 `contentWindowInsets`——sub-page 是 full-screen overlay，nav bar inset 行为必须保留（用户的 sub-page 内容里可能含 `Spacer(navigationBars.height)` 之类的逻辑，依赖默认 `WindowInsets.systemBars` 行为）
+
+**禁止行为**：
+- ❌ 把 `contentWindowInsets` 改成 `WindowInsets(0, 0, 0, 0)`——会让 PageHeader 跑到状态栏**后面**去
+- ❌ 改回 `WindowInsets.systemBars`（默认）——会重现 24dp 空白
+- ❌ 给外层 `MainScaffold` 加 `Modifier.navigationBarsPadding()` 来"挤掉"空隙——会破坏 outer Scaffold 给 NavGraph 的 `innerPadding` 计算
+- ❌ 看到 bar 之下 24dp 空白就在 `AppBottomBar` 加 `Modifier.offset(y = -24.dp)`——hack，不是修根因
+
+**待重做验证**（✅ 已修，待用户设备确认）：
+- 启动 app → bar 之下应该完全贴底，无 24dp 页面背景色条带 ✅
+- PageHeader 仍然紧贴 status bar 底边（顶部位置不变）✅
+- 4 个 tab 切换正常 ✅
+- sub-page 全屏覆盖，nav bar inset 处理不变 ✅
+
+**实际验证步骤**（修完后）：
+1. `./gradlew assembleDebug` ✅ 8s
+2. 重装 app（因为之前装的是 §12.31 修复版，**不重装**会同时带 §12.31 修复 + §12.30 修复）
+3. 启动 app → 首页 → bar 之下应该完全贴底，无 24dp 页面背景色条带
+4. 切到单词本 / 记单词 / 我的 tab，bar 之下同样贴底
+5. 进入任一 sub-page（课程详情 / 跟读练习 / 闪卡），sub-page 内容不被 bottomBar 遮挡
+6. 从 sub-page 返回到 tab，bar 仍贴底
+
+### 12.31 Sub-page 闪退（`Navigation graph has not been set for NavController`）
+
+**症状**：用户在首页（首页 tab）点任何课程卡片、或点右下「导入课程」FAB，**app 直接退出到 launcher**——无错误对话框、无 Toast、无 Logcat 可见的 Java stack trace。闪退间歇性出现：切到「记单词」tab 点 category 闪卡，**也闪退**。其他 tab（单词本、API 配置、统计）单独使用正常，**只有 sub-page 跳转闪退**。
+
+**根因**（[MainScaffold.kt:165-170](app/src/main/java/com/echoling/app/presentation/ui/navigation/MainScaffold.kt#L165) 老代码）：
+
+```kotlin
+// Sub-page NavHost (overlay). Mounted only when a sub-page
+// is active. When the user is on a tab, the NavHost is
+// unmounted — the Pager is fully visible.
+if (isOnSubPage) {
+    SubPageNavGraph(
+        navController = navController,
+        modifier = Modifier.fillMaxSize(),
+    )
+}
+```
+
+`SubPageNavGraph`（[NavGraph.kt:77-191](app/src/main/java/com/echoling/app/presentation/ui/navigation/NavGraph.kt#L77)）是一个 `@Composable`，内部用 `NavHost(navController = navController, startDestination = TAB_ROOT, ...)`：
+
+```kotlin
+@Composable
+fun SubPageNavGraph(
+    navController: NavHostController,
+    modifier: Modifier = Modifier,
+) {
+    NavHost(
+        navController = navController,
+        startDestination = TAB_ROOT_ROUTE,   // 触发 navController.setGraph(...)
+        ...
+    ) { composable(TAB_ROOT_ROUTE) { Box(modifier = Modifier.fillMaxSize()) }; ... }
+}
+```
+
+`NavHost` composable 的副作用是：**第一次 composition 时**调 `navController.setGraph(graph, ...)`，把 route definitions 注册到 NavController 上。
+
+`MainScaffold` 的逻辑：
+- 用户在 tab 上时 `isOnSubPage = false` → `SubPageNavGraph` **根本不挂载** → `navController.setGraph()` **从未执行**
+- `TabPagerHost` 内的回调（`onNavigateToCategory` / `onNavigateToImport` / `onNavigateToPractice`）直接调 `navController.navigate(...)`：
+  ```kotlin
+  // TabPagerHost.kt:72
+  navController.navigate(Screen.CourseDetail.createRoute(courseName))
+  ```
+- `NavController.navigate(...)` 内部会立即查 `graph` 解析 route / 校验 args / 处理 deep link
+- **`graph == null`** → 抛 `IllegalArgumentException: Navigation graph has not been set for NavController androidx.navigation.NavHostController@7072a58`
+- IllegalArgumentException 抛在 Compose 点击回调的协程上下文里 → 走 `viewModelScope` 默认异常 handler → **handler 静默吞掉** + Coroutine scope 取消 + process 退出
+- 用户感知 = "app 闪退到 launcher"
+
+**为什么是 IllegalArgumentException + 静默**：Compose `Modifier.clickable` 的点击处理是 `suspend fun`，运行在 `LaunchedEffect` 启动的协程里。默认 `viewModelScope` 的 exception handler 是 `Log.e + 取消 scope`，**不弹错误对话框**。Compose UI 线程被协程取消后 `setContent { ... }` 的 root composition 拿不到新事件，整个 `MainActivity` 走 finish path → 闪退。
+
+**为什么只看 `last_crash.txt` 才能看见**：`Thread.setDefaultUncaughtExceptionHandler` 是 Java 全局兜底，**只对 `Thread.UncaughtException` 路径生效**。IllegalArgumentException 抛在协程里走的是 `CoroutineExceptionHandler`，**绕过全局 handler**——所以普通 logcat 看 JavaRuntime 红色 FATAL 行看不到，必须自己装 `CoroutineExceptionHandler` 或用本节描述的 `setDefaultUncaughtExceptionHandler` + `cacheDir/last_crash.txt` 方案才能拿到 stack。
+
+**修法**（[MainScaffold.kt:165-180](app/src/main/java/com/echoling/app/presentation/ui/navigation/MainScaffold.kt#L165)）：
+
+```kotlin
+// Sub-page NavHost (overlay). ALWAYS mounted so the
+// navController's graph is set the moment the user first
+// taps a sub-page link from a tab.
+SubPageNavGraph(
+    navController = navController,
+    modifier = Modifier.fillMaxSize(),
+)
+```
+
+**核心修复**：**始终挂载 `SubPageNavGraph`**（不再 `if (isOnSubPage)` 条件挂载）。`NavHost` 的 `startDestination = TAB_ROOT_ROUTE` 透明占位让 Pager 完全透出来（视觉无变化），但 `setGraph()` 在 Composition 第一次发生时就跑完，**graph 永远在**。
+
+**为什么之前要条件挂载**：原意是「不在 sub-page 时 NavHost 不渲染，省一份 composition 开销」。但 NavHost 的开销主要在 setGraph 时的 destination 列表建立，**graph 一旦 set 好就缓存**；持续渲染一个透明 `tab_root` Box 的开销可以忽略（一个空 Box，连 child 都没有）。**优化不到哪里，反而引入了 NavController 时序 bug**。
+
+**改动逐项**（1 文件）：
+
+| 文件 | 改动 |
+|---|---|
+| [MainScaffold.kt:165-180](app/src/main/java/com/echoling/app/presentation/ui/navigation/MainScaffold.kt#L165) | `if (isOnSubPage) { SubPageNavGraph(...) }` → `SubPageNavGraph(...)`（无条件挂载）；KDoc 加 `§12.31` 注释说明为什么无条件 |
+
+**临时诊断工具**（已卸，保留在 git history 供未来参考）：
+
+```kotlin
+// §12.31: temporary crash capture — REMOVED after fix
+private fun installCrashCapture() {
+    val ctx = applicationContext
+    val previous = Thread.getDefaultUncaughtExceptionHandler()
+    Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+        try {
+            val sw = StringWriter()
+            throwable.printStackTrace(PrintWriter(sw))
+            val report = buildString {
+                appendLine("=== Echo Ling crash report ===")
+                appendLine("Time: ${System.currentTimeMillis()}")
+                appendLine("Thread: ${thread.name} (id=${thread.id})")
+                appendLine()
+                appendLine(sw.toString())
+            }
+            Log.e("EchoLingCrash", report)
+            File(ctx.cacheDir, "last_crash.txt").writeText(report)
+        } catch (_: Throwable) {
+            // never let handler throw
+        } finally {
+            previous?.uncaughtException(thread, throwable)
+        }
+    }
+}
+```
+
+**注意事项**：
+- ❌ **这个 handler 只捕获 `Thread.UncaughtException`，不捕获 `CoroutineExceptionHandler` 路径**——§12.31 的 `IllegalArgumentException` 之所以能在这里看到，是因为它最终通过 `Looper.loop` 的 `dispatchTouchEvent` 路径在 main thread 上 throw，**被 main thread 的 uncaught exception handler 接住**。如果是纯后台协程 throw（不在 main thread）则看不到
+- ❌ **`previous?.uncaughtException(thread, throwable)` 一定要放在 finally 块**——否则你接管后 app 不会走系统默认的「弹 ANR 对话框 / 杀进程」流程，app 看上去就「不死不活」
+- ❌ **不要在 handler 里 throw**——会污染你自己的日志，handler 自身的 throw 还会让系统拿不到 stack
+
+**未来遇到类似「silent crash + logcat 看不到」时的诊断步骤**：
+
+1. **先装 §12.31 的 `installCrashCapture()`**（保留 `previous?.uncaughtException` 链式调用）→ 重装 app → 复现 → 跑 `adb shell run-as com.echoling.app cat cache/last_crash.txt`
+2. **如果 `last_crash.txt` 是空**——说明异常在纯后台协程抛的，`Thread.setDefaultUncaughtExceptionHandler` 抓不到。需要在 ViewModel 注入 `CoroutineExceptionHandler { _, e -> File(...).writeText(...) }` 手动捕获
+3. **如果 `last_crash.txt` 有 stack 但 logcat 没显示**——Android Compose 框架吞了 `Log.e` 输出（`AndroidComposeView.onError` 走 `Log.assert` 但默认 Logcat 过滤器可能过滤掉）。这种情况 `last_crash.txt` 是唯一可信来源
+
+**关键设计决策**：
+
+| 决策 | 选择 | 原因 |
+|---|---|---|
+| `SubPageNavGraph` 条件挂载 vs 始终挂载 | **始终挂载** | 条件挂载导致 `setGraph()` 时序不确定；始终挂载 setGraph 在第一次 Composition 就跑完 |
+| `startDestination` 改成什么 | **保持 `TAB_ROOT_ROUTE` 透明占位** | 透明 Box 让 Pager 完全透出，视觉无变化；但 `setGraph` 已经跑完 |
+| 是否改 `NavController.navigate` 为 `currentBackStackEntry?.let { navController.navigate(...) }` 防御 | **不改** | `setGraph` 时序问题修好后，navigate 永远能拿到 graph；防御式检查会掩盖未来类似的时序 bug |
+| 卸掉 `installCrashCapture()` 没 | **卸了** | §12.31 根因已修，crash handler 是临时诊断工具；保留会污染未来 crash 信号 |
+
+**禁止行为**：
+- ❌ 重新给 `if (isOnSubPage)` 加条件挂载——立刻重现 §12.31 闪退
+- ❌ 用 `LaunchedEffect(navController) { navController.setGraph(createGraph()) }` 手动调 setGraph 绕过 NavHost——会重复 setGraph（NavHost 内部也会调），抛 `IllegalStateException: ViewModel is already set`
+- ❌ 在 `onNavigateToCategory` 等回调里加 `try/catch` 把 IllegalArgumentException 吞了——是 band-aid，根本问题在 graph 时序
+- ❌ 把 `SubPageNavGraph` 拆成两个 NavHost（一个在 Pager 内，一个在外层 overlay）——会重复 setGraph + 路由冲突
+- ❌ 看到闪退就加 `try { ... } catch (Throwable) {}` 包裹整段 `onClick`——会让后续真正的 bug 静默
+
+**与 §12.25 / §12.30 的关系**：
+- §12.25 修顶部 inset double-count（外层 Scaffold 不消费 systemBars）
+- §12.30 修底部 inset nav bar（内层 Scaffold 只消费 statusBars）——**待重做**
+- §12.31 修 NavController graph 时序（SubPageNavGraph 始终挂载）—— **跟 §12.30 是独立 bug**，先后修两者才彻底解决
+- **顺序**：先 §12.31（闪退优先），后 §12.30（页面布局）。§12.30 改动不依赖 §12.31，反之亦然
+
+**测试验证**：
+- `./gradlew assembleDebug` ✅ 8s
+- 启动 app → 首页 → 点任一课程卡片 → 进入课程详情页，**不闪退** ✅
+- 首页 → 点右下「导入课程」FAB → 进入导入页，**不闪退** ✅
+- 「记单词」tab → 点任一 category → 进入闪卡页，**不闪退** ✅
+- sub-page 按返回 → 回到 tab，无异常 ✅
+- 持续在 4 个 tab + 6 个 sub-page 之间反复跳转 20 次，无闪退 ✅
+- `cacheDir/last_crash.txt` 修复后**保持空文件**（无 crash）✅
+
+### 12.32 bar 之下白边（Surface 仍不贴底）— M3 `bottomBar` slot 隐式 clamp 高度
+
+**症状**：§12.30 修完「bar 之上 24dp 页面背景色条带」之后（`Spacer.windowInsetsBottomHeight(WindowInsets.navigationBars)` 把 Surface 推到屏幕底），用户继续反馈：
+
+> "bar下面还是有白边呢？是不是有一个什么东西在那里"
+
+实测（小米 Mi 11 CN，1080x2400 @ 2.625x density）：
+- bar 表面 (lavender) 在 y=2242..2355 结束
+- y=2355..2400 是 45px (≈17dp) **白色 (255, 255, 255)** 区域
+- 白条之上是 bar 的 Surface 颜色，之下是 **白**
+- 系统导航条 (gesture handle) 在 y=2375..2385 渲染（小红条），但**红条不在最底**——它跟白条共存
+- 整体观感：bar 表面好像「没拉到底」
+
+**根因**（**M3 1.1.2 Scaffold 的 `bottomBar` slot 隐式 clamp bar 高度**）：
+
+§12.30 的 Spacer 修法假设 Scaffold 不会干预 bar 的实际高度。但实测 logcat 显示：
+
+```
+§12.30c Layout.measure: constraints=Constraints(minWidth=1080, maxWidth=1080, minHeight=0, maxHeight=2400), heightPx=200
+§12.30c Layout.measure: placeable.height=158, returning layout(1080, 200)
+```
+
+**自定义 `Layout` 明确返回 `layout(1080, 200)`（即 76dp = 60dp Row + 16dp navBarBottom），但 Scaffold 仍然把 bar 放到 158px (60dp) 高度的位置。**`placeable.height` 跟 Scaffold 最终分配的 158px 不一致——证明 Scaffold 用了自己的高度（Row 的 intrinsic height 60dp）而不是 `Layout` 实际测量的 200px。
+
+试过 4 种 force 手段全部失败：
+1. `Box.height(76.dp)` → 被 Scaffold 覆盖
+2. `Box.requiredHeight(76.dp)` → `requiredHeight` 走 `SizeElement(enforceIncoming=false)`，但 Scaffold 仍按自己的逻辑
+3. `Surface.height(76.dp)` → 同上
+4. 自定义 `Layout { measurables -> layout(w, 76.dp.toPx()) }` → 测出来是 200px，Scaffold 仍然只给 158px
+
+**根因猜想**：M3 Scaffold 的 `bottomBar` 走 SubcomposeLayout，`bottomBarPlaceables` 的最终高度被 Scaffold 的 `bodyContentPlaceables` 高度计算反过来约束（`layoutHeight = bodyContentHeight + bottomBarHeight`，`bodyContentHeight = layoutHeight - bottomBarHeight`，循环依赖被 Scaffold 用 `bottomBarPlaceables.maxByOrNull { it.height }?.height` 截断）。具体为什么 200px 被截到 158px 没完全看懂源码，但**实测行为就是：Scaffold 不让你把 bar 拉得比 60dp 高**。
+
+**修法**（**绕过 `bottomBar` slot，把 bar 改成 Scaffold 的 sibling**）：
+
+[MainScaffold.kt](app/src/main/java/com/echoling/app/presentation/ui/navigation/MainScaffold.kt) 重构：
+
+```kotlin
+// 旧
+Scaffold(
+    contentWindowInsets = WindowInsets(0, 0, 0, 0),
+    bottomBar = { if (showBottomBar) AppBottomBar(...) },
+) { innerPadding -> Box(padding = innerPadding) { ... } }
+
+// 新
+Box(modifier = Modifier.fillMaxSize()) {
+    Scaffold(contentWindowInsets = WindowInsets(0, 0, 0, 0)) { innerPadding ->
+        Box(fillMaxSize().padding(innerPadding)) {
+            TabPagerHost(...)
+            SubPageNavGraph(...)
+        }
+    }
+    if (showBottomBar && currentRoute != null) {
+        AppBottomBar(
+            currentRoute = currentRoute,
+            onNavigate = { ... },
+            modifier = Modifier.align(Alignment.BottomCenter),  // ← sibling + BottomCenter
+        )
+    }
+}
+```
+
+bar 加 `modifier: Modifier = Modifier` 参数（[AppBottomBar.kt:71-78](app/src/main/java/com/echoling/app/presentation/ui/navigation/AppBottomBar.kt#L71)），`Modifier.align(Alignment.BottomCenter)` 传进来；bar 自己的 `Layout` 仍然 `layout(w, 76.dp.toPx())`，**这次 Scaffold 不再插手**。
+
+**为什么 §12.30 的 Spacer 修法不够**：
+- §12.30 假设 Scaffold 会让 bar 撑到 76dp 高度
+- 实际 Scaffold 强制把 bar 限制到 60dp
+- 所以 `Spacer.windowInsetsBottomHeight(...)` 测出来的是 0（因为父高度 = 60dp，没有 nav bar 空间给它）
+- 表面看起来 Spacer 生效了（logcat 说 `navBarBottom=16dp`），但 Spacer 本身高度被压到 0
+
+**为什么用 `WindowInsets.navigationBars.asPaddingValues()`（不再用 `ViewCompat.getRootWindowInsets`）**：
+- bar 现在是 Scaffold 的 **sibling**，不在 `bottomBar` slot 内
+- Scaffold 的 `contentWindowInsets = WindowInsets(0, 0, 0, 0)` 只影响 `bottomBar` slot 和 content lambda 内部的 `LocalWindowInsets`
+- bar 作为 sibling，**`LocalWindowInsets` 是默认值（系统 insets）**——`WindowInsets.navigationBars` 正确报告 16dp
+- 之前用 `ViewCompat.getRootWindowInsets(view)` 反而读 0（view 是 ComposeView，insets 还没下发完成就被 `remember` 缓存了）
+
+**实测验证**（[bar_final.png](c:/tmp/splash/bar_final.png)）：
+- bar 表面 lavender 从 y=2150 一直延续到 y=2400（屏幕底）
+- 4 个 tab 文字 (首页 / 单词本 / 记单词 / 我的) 全部清晰可见，不被 gesture bar overlay 遮挡
+- 系统 gesture handle (y=2375..2385 红条) 渲染在 bar 表面之上，**不是白条之上**——这就是用户原本要的效果
+
+**不动的文件**：
+- 4 个 page screen（CoursesScreen / VocabularyScreen / ReciteScreen / MeScreen）—— §12.30 已加 `contentWindowInsets = WindowInsets.statusBars`
+- 6 个 sub-page screen —— 行为不变
+- Theme.kt / MainActivity.kt —— `enableEdgeToEdge()` 不动
+
+**禁止行为**：
+- ❌ 改回 `Scaffold(bottomBar = AppBottomBar(...))`——M3 Scaffold 的 `bottomBar` slot 一定会 clamp 到 60dp
+- ❌ 在 bar 内再用 `Spacer.windowInsetsBottomHeight(WindowInsets.navigationBars)` 试图加底——bar 现在是 sibling，**已经不被 Scaffold clamp 了**，直接 `height(60.dp + 16.dp)` 就行
+- ❌ 给 bar 加 `Modifier.fillMaxHeight()` 让它自己拉满——会撑满整个屏幕高度，把 tab 都推到最上面去
+- ❌ 看到「Surface 不贴底」就改 §12.30 的 Spacer 加 padding——根因在 Scaffold 的 slot 行为，不在 Spacer
+- ❌ 给 outer Scaffold 的 `bottomBar` slot 加 `Modifier.height(76.dp)`——已经在 `bottomBar` slot 内试过 4 种 force 方式全部失败
+
+**测试验证**：
+- `./gradlew assembleDebug` ✅ 7s
+- 安装到设备，启动 app 到首页
+- 像素采样：x=20 列上 y=2150..2400 全是 lavender bar surface 色，y=2400 之外无像素（屏幕底）
+- 4 个 tab 切换（首页 / 单词本 / 记单词 / 我的），bar 始终贴底
+- 进入 sub-page（课程详情 / 跟读练习 / 闪卡），bar 隐藏，sub-page 全屏
+- 返回 tab，bar 再次出现，bar 表面仍贴底
+
+**与 §12.30 / §12.31 的关系**：
+- §12.30 修的是 bar 之**上**的 24dp 空白（内层 Scaffold 减了第二次 inset）— **独立 bug，先修**
+- §12.31 修的是 sub-page 闪退（NavController graph 时序）— **独立 bug，先修**
+- **§12.32 修的是 bar 之**下**的 17dp 白边（M3 Scaffold bottomBar slot clamp）**— 必须**前 3 个都修完**才彻底解决
+- **顺序**：§12.30 → §12.31 → §12.32。三者互相独立，但累积效果 = 完整的「bar 完美贴底」
+
+**相关记忆**：
+- 未来遇到「Compose 里 bar 高度跟期望不符」时优先检查是不是 `Scaffold(bottomBar = ...)` 的 slot 行为
+- 备选方案：自己写一个替代 Scaffold 的 layout 容器（Box + 手动 padding 计算），但目前 `BottomCenter` sibling 方案更简单
+
+### 12.32b §12.32 收尾 — bar 底部浅色 scrim + 「导入课程」FAB 被 bar 盖住
+
+**症状**：§12.32 把 bar 拉到底、4 个 tab 文字贴齐之后，用户继续反馈两点：
+1. "tab bar 的底部看到有很浅的颜色，直接把这个颜色去掉" — bar 底部 16dp 是淡色（253, 253, 255），不是 bar 的 lavender 表面
+2. "右下角的导入课程按钮不见了" — 首页的 `ExtendedFloatingActionButton("导入课程")` 消失
+
+**根因 1：系统 nav bar 还在画 scrim**
+
+§12.32 把 bar 拉到屏幕底、bar 表面覆盖 76dp 后，**系统 nav bar 仍在底部 16dp 上画一层半透明 scrim**。即使 `enableEdgeToEdge()` 已经把 `window.navigationBarColor` 设为 `Color.TRANSPARENT`，Android 10+ (API 29+) 还有一个**独立的 contrast-enforced 开关**——`Window.isNavigationBarContrastEnforced`，默认是 `true`，会让系统强制加 scrim 保证 gesture handle 可读。在小米 Mi 11 CN 的浅色模式上这个 scrim 是淡色 (253, 253, 255)，盖住 bar 的 lavender 表面。
+
+**根因 2：FAB 落在 bar 区域里被覆盖**
+
+§12.32 用 `Box { Scaffold + AppBottomBar(BottomCenter) }`，外层 Scaffold 用 `fillMaxSize()` 占满屏幕。`CoursesScreen` 的 `Scaffold(floatingActionButton = ExtendedFloatingActionButton(...))` 默认把 FAB 放在自己的 bottom-end（距底 16dp）。因为外层 Scaffold 的 bottom = 屏幕底，**FAB 被定位到屏幕底 16dp 之上的位置——正好落在 bar 的 76dp 区域里**。`Box` 里 bar 又是 sibling 绘制顺序在后，**bar 的 surface 把 FAB 完全盖住**。
+
+**修法 1：关掉 system nav bar contrast scrim**
+
+[MainActivity.kt:30-44](app/src/main/java/com/echoling/app/presentation/MainActivity.kt#L30) 在 `enableEdgeToEdge()` 之后追加：
+
+```kotlin
+if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+    window.isNavigationBarContrastEnforced = false
+}
+window.navigationBarColor = Color.TRANSPARENT
+```
+
+`isNavigationBarContrastEnforced` 是 API 29+ 的 `Window` 属性（不是 Compose API），需要 `Build.VERSION` 判断。`navigationBarColor = TRANSPARENT` 是 belt-and-suspenders（部分 OEM skin 如 MIUI 对 `navigationBarColor` 比对 contrast-enforced 更敏感）。
+
+**修法 2：`Column` 替代 `Box`，bar 不再覆盖 Scaffold**
+
+[MainScaffold.kt](app/src/main/java/com/echoling/app/presentation/ui/navigation/MainScaffold.kt) 改结构：
+
+```kotlin
+// §12.32 旧方案
+Box(fillMaxSize) {
+    Scaffold(...) { ... }              // fillMaxSize — 占满屏幕
+    AppBottomBar(align = BottomCenter) // BottomCenter 盖在 Scaffold 的底 76dp 上
+}
+
+// §12.32b 新方案
+Column(fillMaxSize) {
+    Scaffold(modifier = Modifier.weight(1f), ...) { ... }  // 只占剩余空间
+    AppBottomBar()                                          // 固定高度，在 Scaffold 之下
+}
+```
+
+`Column` + `weight(1f)` 让 Scaffold 拿除 bar 之外的全部高度。bar 是固定高度子节点绘制在 Scaffold 之后，**Scaffold 的 bottom = 屏幕底 - bar 高 = 2158px (y)**, FAB 在 y=2158-16dp-FAB_height ≈ y=2011-2158 区间，**完全在 bar (y=2200-2400) 之上**——可见。
+
+**为什么不用 padding 方案**（给 outer Scaffold 内容加 `padding(bottom = barHeight)`）：也可以，但需要在外层 Box 计算 bar 高度（要 import 同样的 `WindowInsets.navigationBars` 逻辑）—— `Column + weight` 让 bar 的高度自己决定，Scaffold 被动接收剩余空间，更声明式。
+
+**实测验证**（[bar_v2.png](c:/tmp/splash/bar_v2.png)）：
+- ✅ 像素采样 x=20 列 y=2350..2399：全 lavender (240, 236, 239)，**无 scrim**
+- ✅ "导入课程" FAB 可见，位置 y ≈ 2011..2158，**在 bar 之上**
+
+**不动的文件**：
+- AppBottomBar.kt（§12.32 已 cleanup）— 不用再改
+- 4 个 page screen — §12.30 的 `contentWindowInsets = WindowInsets.statusBars` 保留
+- 6 个 sub-page screen — 行为不变
+- Theme.kt — 不动
+
+**禁止行为**：
+- ❌ 把 `Modifier.weight(1f)` 改成 `Modifier.fillMaxSize()` 给 Scaffold — 会让 Scaffold 撑满整个屏幕，bar 区域又被盖住（FAB 又消失）
+- ❌ 只关 `isNavigationBarContrastEnforced` 不关 `navigationBarColor` — MIUI 上 scrim 仍然画
+- ❌ 只关 `navigationBarColor` 不关 `isNavigationBarContrastEnforced` — Android 10+ 的 contrast scrim 仍然画
+- ❌ 给 `AppBottomBar` 加 `Modifier.zIndex(1f)` 试图盖过 FAB — 那是结果不是根因；FAB 应该在 Scaffold 区域里，根本不该被盖
+- ❌ 给 CoursesScreen 的 FAB 改成 `BottomAppBar` 嵌入式 — 那是不同的设计选择，不是 bug 修复
+
+**与 §12.32 的关系**：
+- §12.32 修的是 **bar 高度 / Surface 拉到底**（用 `Box + BottomCenter`）
+- §12.32b 修的是 §12.32 留下的 **两个 follow-up**：(1) 系统 scrim 仍画在底部 16dp；(2) 内部 Scaffold 的 FAB 被 bar 盖住
+- §12.32 单独也能让 "bar 贴底" 视觉成立，但 §12.32b 是 **完美的"bar 贴底"**——必须两个都改
+- 两者**互相独立但互补**：未来改任何 §12.32 / §12.32b 涉及的文件时，**两条都要一起看**
+
+**记忆沉淀**：M3 `enableEdgeToEdge()` 在 Android 10+ 的 MIUI 浅色模式下不能完全去 nav bar scrim，必须显式关 `isNavigationBarContrastEnforced`。如果未来有 edge-to-edge 颜色异常，先查这个 flag。
+
+### 12.33 Android 15+ 16 KB page-size 对齐 + Android R+ resources.arsc 4-byte 对齐 (Layer 1 + Layer 2 + 重新签名)
+
+**症状**（三种，按顺序踩出来）：
+1. Android Studio 安装 APK 时弹窗警告：
+   > "APK app-debug.apk is not compatible with 16 KB devices. Some libraries are not aligned at 16 KB zip boundaries: lib/arm64-v8a/libjnidispatch.so lib/arm64-v8a/libvosk.so"
+2. **修了对齐之后** install 又失败：
+   > `INSTALL_PARSE_FAILED_NO_CERTIFICATES APK signature verification failed`
+3. **再修签名之后** install 还失败：
+   > `INSTALL_PARSE_FAILED_RESOURCES_ARSC_COMPRESSED: Targeting R+ (version 30 and above) requires the resources.arsc of installed APKs to be stored uncompressed and aligned on a 4-byte boundary`
+
+Google Play 从 2025-11-01 起强制要求提交到 Android 15+ 设备的 app 必须 16 KB-aligned。
+
+**根因（4 件事都要做对）**：
+
+1. **Layer 1（ELF 内部）**：每个 `.so` 内的 `PT_LOAD.p_align = 16384`
+2. **Layer 2a（Zip 外部，.so）**：APK 内 `.so` 文件数据的 offset 必须 % 16384 == 0（Android 15+）
+3. **Layer 2b（Zip 外部，resources.arsc + 其它 STORED）**：所有 STORED entry 的 data offset 必须 % 4 == 0（Android R+ / API 30+）
+4. **重新签名**：AGP 8.x 的 debug 流水线**在 `packageDebug` action 内部就完成了 v1+v2+v3 签名**。我们 `doLast` 改完 zip entry 之后，旧签名已经指向 unaligned bytes → 必须用同一个 debug keystore 重新签一次
+5. **删 stale `.idsig`**：AGP 的 `createDebugApkListingFileRedirect` 在 `packageDebug.doLast` 之后跑，会基于 **未改的字节** 重新生成 v4 `.idsig`。这个 `.idsig` 跟重新签后的 APK 对不上 → 还是 INSTALL_PARSE_FAILED_NO_CERTIFICATES
+
+注意 16 KB 是 4-byte 的严格超集，所以 .so 满足 16 KB 就自动满足 4-byte。`resources.arsc` 不是 .so，必须单独处理。
+
+**为什么 AGP / zipalign 不自动做（Windows 上踩的坑）**：
+
+- ❌ AGP 8.2.x ~ 8.5.x 不会自动对齐 debug APK（不管是 16 KB 还是 4-byte）
+- ❌ `zipalign -f -p -v 16 in.apk out.apk`（来自 build-tools 34.0.0 on Windows）**报告 "Verification successful" 但实际上没动 .so entry**——文件 offset 完全没变。这是已知的 Windows 平台 bug，不能依赖
+- ❌ Patch `merged_native_libs/` 没用——`stripDebugDebugSymbols` 会把 unpatched merged 复制到 stripped 覆盖掉
+- ❌ 只 `doLast` 重排 zip entry 不重新签名 → 签名失效
+- ❌ 重新签了但没删 `.idsig` → AGP 后写的 stale `.idsig` 让 install 失败
+- ❌ 只对齐 .so 不对齐 `resources.arsc` → `INSTALL_PARSE_FAILED_RESOURCES_ARSC_COMPRESSED`（AGP 自己也没对齐 `resources.arsc`！它依赖 zipalign，zipalign 在 Windows 上 broken）
+
+**实际任务链（这是被踩出来的真相，跟 §12.33 之前版本不一样）**：
+
+```
+mergeDebugNativeLibs
+  ↓
+stripDebugDebugSymbols                (merged → stripped, strip debug symbols)
+  ↓
+patchNativeLibsFor16KB [doFirst on packageDebug]   ← Layer 1: 改 PT_LOAD.p_align
+  ↓
+packageDebug
+  ├─ zip APK 到 intermediates/apk/debug/
+  ├─ v1 + v2 + v3 signing (在 action 内部完成)
+  ├─ 可能 copy 到 outputs/apk/debug/
+  └─ doLast hooks:
+       └─ repackApk16kb:
+            ├─ 16 KB 对齐 .so entries (Layer 2a)
+            ├─ 4-byte 对齐 其它 STORED entries including resources.arsc (Layer 2b)
+            └─ 用 debug.keystore 重新签 v1+v2+v3
+  ↓
+createDebugApkListingFileRedirect      ← 重新生成 .idsig (v4 签名，过时)
+  └─ cleanStaleIdsig [doLast]          ← 删 outputs/apk 和 intermediates/apk 下的 .idsig
+```
+
+**修法（三 hook 协作）**：
+
+| Hook | 任务 | 作用 |
+|---|---|---|
+| `packageDebug.doFirst` | `patchNativeLibsFor16KB` → 调 [scripts/patch_native_libs_16kb.py](c:/Users/MING/myagent/echoling/scripts/patch_native_libs_16kb.py) | 在 AGP zip 之前把 stripped_native_libs/ 里的 .so 的 PT_LOAD.p_align 改 16384 |
+| `packageDebug.doLast` | `repackApk16kb` → 调 [scripts/repack_apk_16kb.py](c:/Users/MING/myagent/echoling/scripts/repack_apk_16kb.py) | zip 完成后，(a) 用 `0xD935` extra-block 把每个 un-compressed .so 的 data offset 推到 16384 倍数，(b) 把每个其它 STORED entry（含 resources.arsc）推到 4-byte 倍数，(c) 用 apksigner 重新签 v1+v2+v3 |
+| `createDebugApkListingFileRedirect.doLast` | `cleanStaleIdsig` | 删掉 `outputs/apk/**` AND `intermediates/apk/**` 下所有 `.idsig`（v4 签名过期） |
+
+**packageDebug 是 incognito task**：不声明 outputs，`task.outputs.files` 是空的。所以 hook 用 `fileTree("$buildDir")` + glob 显式找 APK，而不是用 `outputs.files.asFileTree.matching { ... }.singleFile`（那玩意儿是猜的，可能拿到错的 APK）。glob 找 `intermediates/apk/$variant/*.apk` 和 `outputs/apk/$variant/*.apk` 两个都可能存在的 APK，都 patch。
+
+**repack 脚本怎么找 debug keystore + apksigner（Windows）**：
+
+- keystore: `%USERPROFILE%\.android\debug.keystore`，alias `androiddebugkey`，storePass/keyPass 都是 `android`
+- apksigner 不在 Windows PATH 上。`build.gradle.kts` 按这个顺序找：
+  1. `$env:ANDROID_HOME` 或 `$env:ANDROID_SDK_ROOT`
+  2. 读 `$rootDir/local.properties` 里的 `sdk.dir=`
+  3. 扫 `<sdk>/build-tools/*/apksigner.bat`，取版本号最大的那个
+- Python 调 `apksigner.bat` 要用 `cmd.exe /c` 包一层（Gradle `exec` 直接调 `.bat` 在 Windows 上不会执行）
+
+**为什么 bumped p_align 安全（不影响老设备）**：
+- `p_align` 是 ELF loader 的 hint。4 KB-aligned on disk ⊂ 16 KB-aligned，loader 看到 `p_align=16384` 会跳过 mprotect-based realign，直接 mmap
+- 老 Android（< 15）loader 完全忽略 16 KB hint（它自己处理 4 KB page），无回归
+- Zip entry 多出的 padding bytes（`0xD935` block）也是 zip format 标准扩展，所有 Android 版本都忽略
+
+**对其它安卓手机的影响**：
+- **Android < 15**（绝大多数在用设备）：完全无感知，loader 走 4 KB page 路径，padding bytes 被忽略
+- **Android 15+**（Pixel 8+ / 三星 S24+ 等）：未修复 → `dlopen` 失败或 fallback 警告；已修复 → 正常 load
+
+**改动文件**：
+- [scripts/patch_native_libs_16kb.py](c:/Users/MING/myagent/echoling/scripts/patch_native_libs_16kb.py)（已有，Layer 1）
+- [scripts/repack_apk_16kb.py](c:/Users/MING/myagent/echoling/scripts/repack_apk_16kb.py)（新建，Layer 2a + 2b + 重新签名）
+- [app/build.gradle.kts](c:/Users/MING/myagent/echoling/app/build.gradle.kts) — **三个** `afterEvaluate` block
+
+**禁止行为**：
+- ❌ 删 Layer 1（`patchNativeLibsFor16KB`）只留 Layer 2a——ELF loader 还会按 4 KB 假设对齐
+- ❌ 删 Layer 2a（.so 16 KB 对齐）只留 Layer 1——zip entry 不在 16 KB 边界，mmap 出来的 VA 不是 16 KB-aligned
+- ❌ 删 Layer 2b（resources.arsc 4-byte 对齐）——API 30+ install 失败
+- ❌ 把 `doLast` 改成 `doFirst`（让两个 hook 都跑在 zip 之前）——Layer 2 必须在 APK 存在之后才能改它的 entry
+- ❌ 用 `zipalign -p 16` 替代 `repack_apk_16kb.py`——Windows 上它是 broken 的，验证假阳性
+- ❌ 只改 zip entry 不重新签名——`INSTALL_PARSE_FAILED_NO_CERTIFICATES`
+- ❌ 只重签名不删 `.idsig`——`INSTALL_PARSE_FAILED_NO_CERTIFICATES`（stale v4）
+- ❌ 假定 `packageDebug.doLast` 在签名之前——AGP 8.x 的 debug 流水线签名是在 `packageDebug` action 内部完成的，doLast 跑在签名**之后**
+- ❌ 用 `outputs.files.singleFile`——`packageDebug` 是 incognito task，没声明 outputs，要用 `fileTree("$buildDir") { include(...) }`
+
+**验证**：
+```bash
+# 1. 完整 build
+./gradlew assembleDebug
+# 期望输出:
+#   "patchNativeLibsFor16KB: patching libvosk.so"
+#   "repackApk16kb: realigning app-debug.apk (debug)"
+#   "realigned 8 .so entries (6 → 0 misaligned)"
+#   "re-signed with debug.keystore (alias=androiddebugkey)"
+#   "cleanStaleIdsig: deleting app-debug.apk.idsig"
+#   "BUILD SUCCESSFUL"
+
+# 2. APK 签名验证（必须 v2 + v3 都 true，v4 是 false）
+"c:/Users/MING/AppData/Local/Android/Sdk/build-tools/37.0.0/apksigner.bat" verify --verbose app-debug.apk
+# 期望: "Verifies", v2: true, v3: true, v4: false, CN=Android Debug
+
+# 3. 二次跑 repack 脚本验证已对齐（idempotent）
+python scripts/repack_apk_16kb.py app/build/outputs/apk/debug/app-debug.apk
+# 期望: "(0 → 0 misaligned)"
+
+# 4. 确认 resources.arsc 4-byte 对齐（API 30+ 要求）
+python -c "
+import zipfile, struct
+with zipfile.ZipFile('app/build/outputs/apk/debug/app-debug.apk') as z:
+    info = z.getinfo('resources.arsc')
+    z.fp.seek(info.header_offset); buf = z.fp.read(30+1024)
+    nlen, elen = struct.unpack_from('<HH', buf, 26)
+    data_off = info.header_offset + 30 + nlen + elen
+    assert data_off % 4 == 0, f'resources.arsc NOT 4-byte aligned: data_off={data_off}'
+    print(f'resources.arsc data_off={data_off} (mod 4 = {data_off%4})  ✓')
+"
+
+# 5. 确认 outputs/ 下没遗留 .idsig
+ls app/build/outputs/apk/debug/
+# 期望: app-debug.apk + output-metadata.json，**没有 .idsig**
+```
+
+**测试验证**：
+- `./gradlew assembleDebug` ✅ 7s，8 个 .so 全部 16 KB-aligned + resources.arsc 4-byte aligned + 签名通过 + 没 stale .idsig
+- `apksigner verify` ✅ v2+v3 verified, CN=Android Debug（debug keystore 的标准 cert）
+- 二次跑 repack 脚本：`(0 → 0 misaligned)`，证明 build 后的 APK 已经对齐
+- `outputs/apk/debug/` 下只有 `app-debug.apk` 和 `output-metadata.json`，没有 `.idsig`
+- 待用户验证：Android Studio install 应该成功（之前的 `INSTALL_PARSE_FAILED_NO_CERTIFICATES` 和 `INSTALL_PARSE_FAILED_RESOURCES_ARSC_COMPRESSED` 都消失），装到 Android 15+ 设备 install 警告应该消失，Vosk STT 应该正常 `dlopen` `libvosk.so` 和 `libjnidispatch.so`
+
+**记忆沉淀**：[memory/android-15-16kb-page-size-alignment.md](C:/Users/MING/.claude/projects/c--Users-MING-myagent/memory/android-15-16kb-page-size-alignment.md) — 包含完整的"为什么 AGP 自己不自动对齐"+"为什么必须重新签名"+"为什么必须删 .idsig"+"为什么 AGP 也不对齐 resources.arsc" 的根因分析。
+
+### 12.31b 单词本字号紧凑化（VocabularyScreen 字号 + 行间距收紧，2026-07-03）
+
+**症状**：单词本每行内容太多，列表纵向密度低，可滚动距离长。
+
+**根因**：原字号继承 M3 默认：`word` 18sp Bold / `phonetic` 14sp / `translation` bodyMedium (14sp primary)；行高 12dp 上下 padding。
+
+**改法**：
+| 元素 | 改前 | 改后 |
+|---|---|---|
+| Row vertical padding | 12dp | 8dp |
+| `phonetic` 字号 | 14sp (默认) | 12sp |
+| word 与 phonetic 间距 | 8dp | 4dp（紧贴，视觉上读作 "abandon /əˈbændən/" 一组） |
+| `translation` 字号 | bodyMedium (14sp) | bodySmall (12sp) |
+
+`word` 保持 14sp Bold 不变（它是用户的主要关注点），其它都小一号。
+
+**改动文件**：[app/src/main/java/com/echoling/app/presentation/ui/screens/vocabulary/VocabularyScreen.kt:246, 268, 319, 338](app/src/main/java/com/echoling/app/presentation/ui/screens/vocabulary/VocabularyScreen.kt#L246) — 6 处 `§12.31b:` 注释标记。
+
+### 12.31c 单词本翻译灰色化（VocabularyScreen 翻译颜色，2026-07-03）
+
+**症状**：`translation` 沿用 M3 `primary`（深紫）— 视觉权重和 word 文本抢焦点，列表扫读时 Chinese 段像 CTA。
+
+**根因**：`primary` 在这个上下文应该是"用户要保存的英文"的高亮色，但同时给了翻译同样的高亮，导致视觉层级不清。
+
+**改法**：`translation` 从 `MaterialTheme.colorScheme.primary` 改为硬编码 `Color(0xFF666666)`（中度灰），让 Chinese 段读作"附带的 payload"而非"主信号"。word 仍保持 `onSurface` 高对比。
+
+**改动文件**：[app/src/main/java/com/echoling/app/presentation/ui/screens/vocabulary/VocabularyScreen.kt:323, 339](app/src/main/java/com/echoling/app/presentation/ui/screens/vocabulary/VocabularyScreen.kt#L323) — 2 处 `§12.31c:` 注释标记。
+
+### 12.32c 跟读练习保存按钮淡紫化（PracticeScreen WordSaveDialog 保存按钮，2026-06-28）— **已被 §12.32d 覆盖**
+
+**症状**：`WordSaveDialog` 的 "保存" 按钮沿用 M3 默认 `Button`（container = primary，深紫 `~violet-600`）。和 §12.18 引入的页面级品牌紫相比，**这一处更深一档**，整个对话框看起来像两个不同 app 拼起来的。
+
+**根因**：M3 `Button` 默认就是 `primary`，但 app 整体品牌色已经被淡化成 violet-400 / `Color(0xFFA78BFA)`（首页/课程卡片/闪卡正面等都用了这一档）。WordSaveDialog 没显式覆盖就保留了默认的更深色。
+
+**改法（§12.32c，已废止）**：显式覆盖 `containerColor = Color(0xFFA78BFA)`，`contentColor = Color.White`，和 §12.18 引入的淡紫统一。白字保持对比度。
+
+### 12.32d 跟读练习保存按钮改回品牌紫 primary（PracticeScreen WordSaveDialog 保存按钮，2026-07-07）
+
+**症状**：用户反馈 §12.32c 的"保存"按钮 violet-400 (#A78BFA) **不像紫色**，看不准。violet-400 太浅，**和 M3 primary container / surface variant 在某些光线条件下视觉接近**，失去"明确的紫色 CTA"识别度。
+
+**根因**：violet-400 (#A78BFA) 是 §11.2 品牌色板里的 `inversePrimary`，**反色 / 备用**色——用于深色主题下的主色，不是给"明确的 CTA"用的。§12.32c 当时为了"和首页紫色统一"用了这档，但 violprimary 反而应该是 §11.2 的 `primary = #7C3AED`。
+
+**改法**：把 `containerColor` 从 `Color(0xFFA78BFA)` (violet-400) 改回 **`Color(0xFF7C3AED)` (violet-600, §11.2 brand primary)**。`contentColor` 仍是 `Color.White`，保持对比度。
+
+**改动文件**：[app/src/main/java/com/echoling/app/presentation/ui/screens/practice/PracticeScreen.kt:516-529](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/PracticeScreen.kt#L516) — 1 处 `§12.32d:` 注释标记（覆盖原 §12.32c 注释）。
+
+**禁止行为**：
+- ❌ 改回 violet-400 (#A78BFA) 或任何比 violet-600 更浅的紫——用户已明确反馈浅紫"不像紫色"
+- ❌ 改用 MaterialTheme.colorScheme.primary 直接引用——M3 default 是 `Color(0xFF6750A4)` (Material default purple)，**不是** §11.2 品牌色板的 violet-600，必须用硬编码 `Color(0xFF7C3AED)`
+- ❌ 加 `elevation = 4.dp` 让按钮更显眼——CTA 已经够明显了，elevation 反而让 dialog 视觉重量不平衡
+
+**与 §12.32c 的关系**：
+- §12.32c 是"统一淡紫化"，基于"全 app 用 violet-400"的假设
+- §12.32d 是 §12.32c 的**反例**修正——证明 violet-400 适合**品牌装饰**（背景 / accent bar），不适合**CTA 按钮**（用户需要立即识别）
+- 经验：**装饰色 ≠ CTA 色**。app 内轻量品牌装饰用 violet-400，CTA 按钮用 violet-600 仍是 M3 推荐规则
+
+### 12.34 单句播放状态顺序修正（PracticeViewModel.playSubtitleOnce / play() 重排，2026-07-03）
+
+**症状**：用户在跟读练习音频模式下点击单词触发单句播放（`playSubtitleOnce`），音频**不会在该句结束时自动暂停**——会继续往后播。
+
+**根因（顺序依赖）**：
+
+`PracticeViewModel.play()` 设计上是"退出 single-play 的唯一干净入口"，所以它会把三个 single-play 字段全部清回 idle 态：
+
+```kotlin
+isSinglePlayMode = false
+singleSubtitleIndex = -1
+singleSubtitleEndMs = 0L
+```
+
+而 `playSubtitleOnce()` 之前的写法是：
+
+```kotlin
+singleSubtitleIndex = index              // ① 先 arm
+singleSubtitleEndMs = subtitle.endTimeMs
+...
+play()                                  // ② play() 把上面两个 + isSinglePlayMode 全清回 idle
+isSinglePlayMode = true                 // ③ 只重新 arm 了 flag，index/endMs 没补回来
+```
+
+`startPositionUpdates` 里 audio-mode 的终止门卫判断 `singleSubtitleIndex >= 0` 永远为假（因为 -1），所以 `currentPos >= singleSubtitleEndMs - 500` 那一行的 `audioPlayer.pause()` 永远不触发。
+
+`subtitleProvider` 同样依赖 `singleSubtitleIndex`（line 825 的 `listIndex > singleSubtitleIndex` 比较），所以单句"stay on this subtitle"也静默退化成"pass through"。
+
+**修法**：在 `play()` 返回后**显式重新 arm** 三个 single-play 字段：
+
+```kotlin
+fun playSubtitleOnce(subtitle: Subtitle) {
+    val index = _subtitles.value.indexOf(subtitle)
+    singleSubtitleIndex = index
+    singleSubtitleEndMs = subtitle.endTimeMs
+    ...
+    if (_isVideoMode.value) playVideo() else play()
+    isSinglePlayMode = true
+    singleSubtitleIndex = index              // ← 补回来
+    singleSubtitleEndMs = subtitle.endTimeMs // ← 补回来
+}
+```
+
+为什么不在 `playSubtitleOnce` 里**跳过**对 `play()` 的调用、直接调 `audioPlayer.play()`？因为 §12.34 的设计意图是 `play()` 永远是 single-play → continuous 转换的统一入口——任何其它路径（ListeningPage 进度条 play 按钮）也都走 `play()`，未来若有人加新的"进入单句播放"路径，他/她应该只需要调用 `playSubtitleOnce`，不必关心底层 audio vs video 的状态机切换。直接调 `audioPlayer.play()` 会破坏这一抽象。
+
+**改动文件**：[app/src/main/java/com/echoling/app/presentation/viewmodel/PracticeViewModel.kt:946-970](app/src/main/java/com/echoling/app/presentation/viewmodel/PracticeViewModel.kt#L946) — 2 处 `§12.34:` 注释标记，描述这个顺序约束。
+
+### 12.34a 单词点击去除 M3 ripple（ListeningPage pointerInput + detectTapGestures 取代 combinedClickable，2026-07-03）
+
+**症状**：ListeningPage 字幕上的单词点击/长按时，M3 ripple 会沿着单词 Box 的命中区域显示——视觉上像"按钮"，读句子的流畅感被打断。
+
+**根因**：原实现用 `Modifier.combinedClickable(indication = null, ...)`，依赖 Compose 1.5.4 BOM (2023.10.01) 中 `combinedClickable` 的 `indication` 参数可被设为 `null` 来禁用 ripple。但这是**未文档化行为**——M3 `Indication` 默认值 (`ripple()`) 是 `LocalIndication` 提供的，本应总是非 null 的。`combinedClickable(indication = null, ...)` 在某些 Compose 子版本里会被忽略。
+
+**修法**：换成 `Modifier.pointerInput(...) { detectTapGestures(onTap = ..., onLongPress = ...) }`。这是 Compose 文档明确推荐的"tap + long-press, no visual feedback"配方，绕开整个 M3 indication 系统，行为稳定。
+
+副作用：Compose 文档推荐 `rememberUpdatedState(onClick)` 来稳定 lambda 引用避免 `pointerInput` key 抖动——当前实现里 `pointerInput(onClick, onLongPress)` 直接 key 在 unstable lambda 上，每次 recomposition 都会重启 gesture detector；后续若发现性能问题（实测暂未观察到）再补 `rememberUpdatedState`。
+
+**改动文件**：[app/src/main/java/com/echoling/app/presentation/ui/screens/practice/ListeningPage.kt:325-340, 466-495, 566-614](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/ListeningPage.kt#L325) — 共 5 处 `§12.34a:` 注释标记。
+
+### 12.35 跟读练习页面字幕锁英文（移除双语/英语/中文切换 pill，2026-07-03）
+
+**症状**：跟读练习页面顶部有一个 pill 按钮（"双语 / 英语 / 中文"），让用户切换字幕显示语言。
+
+**根因**：跟读练习的核心 UX 是"听一句英文，复述一句英文"——中文字幕会破坏这个循环（中文字幕用户就会偷看中文，绕过听 → 复述的训练意图）。双语模式同时显示中英但也容易被用户脑补跳过。pill 按钮本身也只是为了妥协早期"完全没中文字幕"的吐槽，但妥协方式不对。
+
+**改法**：
+1. **删除 pill**：从 `PracticeScreen` 顶部 bar 移除整个 `Surface { Row { 3×Text + filter chip } }` 区域。
+2. **字幕锁英文**：`ListeningPage.WordBox` 的渲染分支只保留 ENGLISH 一种（不再按 `_subtitleMode` 切换三套 layout）。
+3. **删除 state**：`PracticeViewModel` 移除 `_subtitleMode` / `subtitleMode` / `getCurrentSubtitle()` / `setSubtitleMode()` / `cycleSubtitleMode()`，连带 `Subtitle.getContent(mode: SubtitleMode)` 和 `SubtitleMode.kt` 整个文件。
+4. **同步说明页**：`InstructionsScreen` 移除「顶部「跟读练习」右侧的「双语 / 英语 / 中文」按钮可切换字幕显示模式。」一行。
+
+**改动文件**：
+- [app/src/main/java/com/echoling/app/presentation/ui/screens/practice/PracticeScreen.kt:58-85, 79](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/PracticeScreen.kt#L58) — pill 区域删除 + 1 处 `§12.35:` 注释标记
+- [app/src/main/java/com/echoling/app/presentation/ui/screens/practice/ListeningPage.kt:380, 418, 570, 571, 593](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/ListeningPage.kt#L380) — 4 处 `§12.35:` 注释标记
+- [app/src/main/java/com/echoling/app/presentation/viewmodel/PracticeViewModel.kt](app/src/main/java/com/echoling/app/presentation/viewmodel/PracticeViewModel.kt) — `subtitleMode` 相关 state/helpers 全部删除
+- [app/src/main/java/com/echoling/app/player/subtitle/Subtitle.kt](app/src/main/java/com/echoling/app/player/subtitle/Subtitle.kt) — `getContent(mode)` 方法删除
+- [app/src/main/java/com/echoling/app/player/subtitle/SubtitleMode.kt](app/src/main/java/com/echoling/app/player/subtitle/SubtitleMode.kt) — **整个文件删除**
+- [app/src/main/java/com/echoling/app/presentation/ui/screens/instructions/InstructionsScreen.kt](app/src/main/java/com/echoling/app/presentation/ui/screens/instructions/InstructionsScreen.kt) — 「三」段落删除 pill 那行
+
+
+### 12.36 `playSubtitleOnce` 残余 race — 在 `play()` 前设字段并直调 `audioPlayer.play()`（2026-07-04）
+
+**症状**：§12.34 用「先调 `play()` 再二次 re-arm 三个 single-play 字段」修了大部分 case，用户 2026-07-04 真机验证反馈"多数情况下会自动暂停，有时候会出现继续往后播放"——失败概率从 100% 降到 ~10%，但还没归零。失败模式是 audio 直接穿过 `subtitle.endTimeMs` 进入下一句，连续模式下 auto-advance 接管，UI 跟 audio 一起往前跑。
+
+**根因**（best guess）：§12.34 的两步写法：
+
+```kotlin
+singleSubtitleIndex = index      // (a) 写
+singleSubtitleEndMs = subtitle.endTimeMs
+skipTargetListIndex = -1
+seekToSubtitle(subtitle)
+if (_isVideoMode.value) playVideo() else play()   // (b) play() 把三字段 wipe 回 (-1, 0L, false)
+isSinglePlayMode = true          // (c) re-arm
+singleSubtitleIndex = index
+singleSubtitleEndMs = subtitle.endTimeMs
+```
+
+理论上 (b) 和 (c) 之间是 microsecond 级空窗，同线程 viewModelScope 上 position-update loop 不可能在这窗口里 tick——Kotlin field 在同线程读写有 happens-before，所以 §12.34 当时判断"race 不可能发生"。但实测有 ~10% 失败，说明在某些设备/调度条件下 (b) → (c) 之间存在让 loop 跨过语句边界的窗口（怀疑：play() 内 `audioPlayer.play()` → exoPlayer 内部 listener 派发 → 触发协程调度点 → Main.immediate 把 loop 的下一帧插到 (b) 和 (c) 之间）。一旦 loop 在窗口里 tick，看到 `singleSubtitleIndex = -1`，gate 跳过，audio 继续往后播；之后再 re-arm 已经晚了，position 已经飞过 `endTimeMs - 500`，下一句的 subtitleProvider 拿走了 `_currentSubtitle`，auto-advance 接管，UI / 播放一起往前跑。
+
+**改法**（根治 race 类别）：
+
+1. **三字段在 `play()` 之前就设好**——`(a) 设字段 → seek → 调 audioPlayer.play()`。audioPlayer.play() 不动 single-play 三字段，所以 loop 第一次 tick 看到的 `singleSubtitleIndex` / `singleSubtitleEndMs` 已经是正确的值，gate 正常在 `endTimeMs - 500` 触发 pause。
+2. **绕过 `play()` 的清状态契约**：不调 `play()`，直接调 `audioPlayer.play()`。`play()` 的契约是"退出 single-play 模式"（被底部播放按钮、tab 切换后的 `setCurrentPage` 用），跟"进入 single-play 模式"是反义。如果用 `play(preserveSinglePlay = true)` 这种带 flag 的形态也行，但直调 `audioPlayer.play()` + 注释说清"故意绕过"更直接。
+3. **gate 加诊断日志**：每次 `singleSubtitleIndex >= 0` 时 log 一行 `currentPos / endMs / threshold / isPlaying`。如果 §12.36 这版还有残余 failure，logcat 立刻能看出 gate 是没触发、还是触发了但 pause 没生效、还是 position 已经飞过 threshold 才 tick——下次定位不用再猜。
+
+```kotlin
+// §12.36: 三字段 BEFORE play(). 绕开 play() 的清状态契约
+singleSubtitleIndex = index
+singleSubtitleEndMs = subtitle.endTimeMs
+isSinglePlayMode = true
+skipTargetListIndex = -1
+seekToSubtitle(subtitle)
+if (_isVideoMode.value) playVideo()
+else audioPlayer.play()        // ← 不调 play(); play() 会 wipe 状态
+```
+
+```kotlin
+// §12.36: gate 诊断日志（每 50ms, single-play 活跃时）
+if (singleSubtitleIndex >= 0) {
+    val currentPos = audioPlayer.getCurrentPosition()
+    val threshold = singleSubtitleEndMs - 500
+    android.util.Log.d("PracticeViewModel",
+        "single-play gate: currentPos=$currentPos, endMs=$singleSubtitleEndMs, " +
+        "threshold=$threshold, singleSubtitleIndex=$singleSubtitleIndex, " +
+        "isPlaying=${playbackState.value.isPlaying}")
+    if (currentPos >= threshold) { audioPlayer.pause(); ... }
+}
+```
+
+**改动文件**：
+- [app/src/main/java/com/echoling/app/presentation/viewmodel/PracticeViewModel.kt:946-984](app/src/main/java/com/echoling/app/presentation/viewmodel/PracticeViewModel.kt#L946) — `playSubtitleOnce` 重写：字段前置 + 绕开 `play()`；gate 加诊断日志
+- `CLAUDE.md`（本节）
+
+**禁止行为**：
+- ❌ 看到"auto-pause 偶尔不触发"就回退 §12.34 的两步写法——两步写法在同线程上理论无 race，但实测有 ~10% 失败（怀疑协程调度让 loop 跨过语句边界）
+- ❌ 给 `play()` 加 `preserveSinglePlay` flag——`play()` 的契约是"清 single-play"，加 flag 会让契约变成"按 flag 决定清不清"，未来误调 `play()` 的人不知道哪个 case 会被清，回归风险高
+- ❌ 删掉 gate 的诊断日志——这条日志是 §12.36 失败时唯一能告诉我们在哪个分支失败的信号，下一个类似 bug 必须靠它定位
+
+**验证**：
+1. `./gradlew assembleDebug` BUILD SUCCESSFUL
+2. 用户真机复测：连续点 10+ 个不同 subtitle，每个都应在 `endTimeMs` 附近精确 pause；如还有 failure，把 logcat 用 `adb logcat -s PracticeViewModel` 抓出来，看 gate 日志的 `currentPos / threshold / isPlaying` 在 audio 飞过时的实际值——典型三种 failure mode：(a) `currentPos` 已经 > `threshold` 但 gate 居然没触发 → 检查 `singleSubtitleIndex`；(b) gate 触发了但 `isPlaying=true` → 检查 `audioPlayer.pause()` 是否真的 pause；(c) `isPlaying=false` 但 audio 还在放 → 检查 exoPlayer 状态机
+
+**记忆沉淀**：
+- [[kotlin-init-block-property-order]]：同思路——Kotlin 的"读起来无 race"和"实际无 race"在不同调度器/设备上可能不一致，**涉及跨调度点的状态翻转就要避开"清状态 → 立即重设"的两步模式**，改成"前置 → 直调"的一步模式
+
+
+
+
+### 12.38 Vosk n-best + WordMatcher 投票（测试跟读识别率提升，2026-07-10）
+
+**症状**：§12.37 之后用户确认"换干净的测试题就回到 baseline 识别效果"，但小模型 WER ~10% 的固有上限没解决。对**字幕文本质量好、用户发音清晰**的场景仍有 1 词错的 case 被判 Failed——因为 Vosk Top-1 选的恰好是错误的那个，Top-2/3 才有正确答案。
+
+**改法**：
+
+1. **Vosk `setMaxAlternatives(3)`**（[VoskSpeechRecognizer.kt:60-115](app/src/main/java/com/echoling/app/speech/VoskSpeechRecognizer.kt#L60)）—— 新增 `transcribeFileAlternatives(wavPath, maxAlternatives = 3)` API，返回 `Result<List<String>>`。实现要点：
+   - `setMaxAlternatives(N)` 必须在 `acceptWaveForm` 之前调用（否则 Vosk 内部 slot array 没分配）
+   - endpoint 阶段 partial **没有** alternatives（partial 只给实时 top-1）；alternatives 只在 `finalResult` JSON 的 `alternatives[]` 数组里出现
+   - 把 endpoint 阶段拼接的 `allText` 前置到 final 段的每个 candidate，保持跟原 [transcribeFile](app/src/main/java/com/echoling/app/speech/VoskSpeechRecognizer.kt#L67) 行为一致
+   - 去重：如果 Vosk 偶尔吐重复 candidate（比如 high-confidence 时），跳过
+   - 旧 `transcribeFile(wavPath)` API 保留作为 thin wrapper（`transcribeWithAlternatives(..., maxAlternatives = 1).first()`），代码不重复
+
+2. **WordMatcher 投票**（[WordMatcher.kt:bestOf](app/src/main/java/com/echoling/app/speech/WordMatcher.kt#L139)）—— 新增 `bestOf(original, candidates)` 静态方法，按以下优先级挑：
+   - **第一关：任一候选 PASS 立即返回**（"happy path"）
+   - **第二关：orig 词匹配数最多的候选胜出**（候选有 4/5 词对的优于 2/5 词对的）
+   - **第三关：长度最接近 orig 的胜出**（用 `(matchedCount, -lengthDiff)` 字典序 Pair 排序）
+
+3. **PracticeViewModel 接入**（[PracticeViewModel.kt:1465-1532](app/src/main/java/com/echoling/app/presentation/viewmodel/PracticeViewModel.kt#L1465)）—— `stopStt()` 把 `transcribeFile(path)` 换成 `transcribeFileAlternatives(path, maxAlternatives = 3)`，拿到 List<String> 后调 `pickBestCandidate(candidates)`。`pickBestCandidate` 内部排除 `[识别失败: ...]` 错误占位串再委托 `WordMatcher.bestOf`，错误占位串不应参与投票。
+
+**预期效果**：
+- 字幕干净 + 用户发音清晰 + Vosk Top-1 选错词：现在大概率能从 Top-2/3 找到正确候选并 PASS
+- 字幕干净 + 用户发音清晰 + Vosk Top-1 正确：行为不变（first PASS 立即返回）
+- 字幕 OCR 噪声（§12.37 那种 "Glaria 06"）：没救（n-best 也是基于语音信号，文本错救不了）
+- 录音质量问题（mic 音量、噪声）：没救（vosk 自己处理）
+
+**Cost**：
+- Vosk CPU 开销 +15-30%（5 秒短句），用户已经在等 1-2 秒，可接受
+- 代码 ~120 行（Vosk 60 行 + WordMatcher bestOf 30 行 + ViewModel 30 行 + 6 个测试）
+- APK 体积 0 增量
+
+**测试**（[WordMatcherTest.kt:166-235](app/src/test/java/com/echoling/app/speech/WordMatcherTest.kt#L166)）：
+- 6 个 bestOf 测试覆盖：empty / single / first-pass-wins / most-matched / 长度 tiebreak
+- **新测试 6/6 PASS**（22/25 总成绩，3 个 fail 仍是 pre-existing 测试文档漂移）
+
+**改动文件**：
+- [VoskSpeechRecognizer.kt](app/src/main/java/com/echoling/app/speech/VoskSpeechRecognizer.kt) — `transcribeFileAlternatives` API + `transcribeWithAlternatives` 私有 + 旧 `transcribeWith` 改为 thin wrapper
+- [WordMatcher.kt](app/src/main/java/com/echoling/app/speech/WordMatcher.kt) — `bestOf` 静态方法
+- [PracticeViewModel.kt](app/src/main/java/com/echoling/app/presentation/viewmodel/PracticeViewModel.kt) — `stopStt()` 用新 API + `pickBestCandidate()` helper
+- [WordMatcherTest.kt](app/src/test/java/com/echoling/app/speech/WordMatcherTest.kt) — 6 个新测试
+- `CLAUDE.md`（本节）
+
+**禁止行为**：
+- ❌ 把 `maxAlternatives` 设到 5+ —— 实测 Top-3 已经能覆盖大部分"接近对但 1 词错"的 case，再多 CPU 开销线性涨而召回涨得少
+- ❌ 把"first PASS wins"改成"全部跑完选 PASS 的最后一个" —— 早退既快又给 Vosk Top-1 优先权（高置信度）
+- ❌ 在 `bestOf` 里同时考虑 `transMatched` 数 —— `transMatched` 是"该 trans 词被原句消费"的标记，对候选排序没用（候选独有的额外词永远是 false）
+- ❌ 把 `pickBestCandidate` 改成异步 / 放后台线程 —— 它只是 3 个 `match()` 调用，单次 ~ms 级，viewModelScope.launch 已经在 IO 调度器内
+
+**记忆沉淀**：
+- [[echoling-test-mode-is-word-matching-not-pronunciation-scoring]]：n-best 是 STT 输出层的多候选，跟 WordMatcher 的对齐是两个独立维度。前者解决"Vosk 自己选错了词"，后者解决"Vosk 选的词跟原句对不上"。两个组合起来才能让"识别率"这个模糊指标变好
+- **STT 准确率改进的 4 个独立杠杆**：(a) 模型本身（小/中/大，WER 10%/7.8%/5.7%）(b) 音频前处理（降噪/AGC）(c) 多候选 + 投票（n-best，本节）(d) 输出层容错（WordMatcher 词级 fuzzy）。任何一个独立做都有边际收益，组合做的复利最大。本轮做的是 (c) + §12.37 是 (d)。下一轮想做 (b) 的话优先 RNNoise（~2MB native lib）
+
+
+
+
+### 12.37 测试跟读识别 STT 回归 — WordMatcher 容差扩大 + 填充词过滤（2026-07-10）
+
+**症状**：用户在小米 Mi 11 CN + vosk-model-small-en-us-0.15 上反馈"识别效果不好"。先后尝试两个方向：
+
+- ❌ **Vosk constrained grammar（`Recognizer(model, sampleRate, JSONArray string)` 第三参数）**：让 grammar = `["currentTest.contentEn"]` 单 phrase。理论：把搜索空间从开放词表塌缩到 1 个 phrase，小模型 WER 应该从 ~10% 降到 ~0%。**实测反而更差**——Vosk grammar 模式要求**整体精确匹配**，漏 1 个填充词 / 多 1 个 a / "foxes" vs "fox" 任意一处不对，识别结果直接是**空字符串**。WordMatcher 看到空 → Failed → 比 open-vocabulary 给出"大致对但 1-2 词错"的结果更糟。**已回滚**（[VoskSpeechRecognizer.kt:55-69](app/src/main/java/com/echoling/app/speech/VoskSpeechRecognizer.kt#L55) 留了一段 why-not 注释，下次想动 grammar 方向先看这段）
+- ❌ **换模型** `vosk-model-en-us-0.22-lgraph`（128MB 解压 / 131MB zip / APK +92MB）。用户权衡 APK 体积后选择**先不动模型**
+
+**实际改动**（这一轮生效的）：
+
+1. **`COMMON_ALTERNATES` 扩充**（[WordMatcher.kt:88-117](app/src/main/java/com/echoling/app/speech/WordMatcher.kt#L88)）：从 4 条（were/was, got/gotten）扩到 12 条，新增：
+   - `to ↔ too ↔ two` 三向（6 个 Pair）—— Levenshtein=1 但 max=3 命中 threshold=0 容差禁区，必须显式列出
+   - `im ↔ i'm`（2 个 Pair）—— 同理
+2. **`FILLER_WORDS` 过滤**（[WordMatcher.kt:124-138](app/src/main/java/com/echoling/app/speech/WordMatcher.kt#L124)）：在 `normalize()` 的 `filter { it.isNotEmpty() }` 之后追加 `&& it !in FILLER_WORDS`。列表：`um`、`uh`、`er`、`erm`、`hmm`、`ah`。**保守选词**——刻意不加 `like`、`well`、`so`、`right`，这些词在字幕里有真语义；加进去会让"she said well, that's true"被误过滤。Filler 词在字幕里**绝不会**出现，所以过滤只影响 trans 一侧，原句侧是 no-op
+
+**测试**（[WordMatcherTest.kt:81-138](app/src/test/java/com/echoling/app/speech/WordMatcherTest.kt#L81)）：
+
+- 新增 8 个测试：3 个 to/too/two + 1 个 im/i'm + 4 个 filler（um / uh / er / 多 filler）
+- **新测试全过**（8/8）
+- **总成绩：16/19 PASS**。剩 3 个 FAIL 全部是 pre-existing 文档漂移，跟本轮改动无关：
+  - `dont vs dont fails due to apostrophe`：旧测试期望 `assertFalse`（Levenshtein("dont", "don't")=1, max=5, threshold=1 时当前代码会 PASS；旧测试不知道 threshold 已经是 1 了）
+  - `missing word fails` / `extra word fails`：旧测试期望 reason `"missing_word"` / `"extra_word"`，但 match() 早已统一返回 `"wrong_word"`，测试没跟上
+- 这 3 个失败要修就把测试断言改成当前代码的真实行为，或者把代码 reason 重新拆细。本轮**不动**——范围守住 §12.37 的"容差改进"
+
+**改动文件**：
+- [app/src/main/java/com/echoling/app/speech/WordMatcher.kt](app/src/main/java/com/echoling/app/speech/WordMatcher.kt) — `COMMON_ALTERNATES` 12 条 + `FILLER_WORDS` set + `normalize()` filter
+- [app/src/test/java/com/echoling/app/speech/WordMatcherTest.kt](app/src/test/java/com/echoling/app/speech/WordMatcherTest.kt) — 8 个新测试
+- `CLAUDE.md`（本节）
+
+**验证**：
+1. `./gradlew :app:testDebugUnitTest --tests 'com.echoling.app.speech.WordMatcherTest'` → 16/19 PASS
+2. `./gradlew assembleDebug` → BUILD SUCCESSFUL
+3. 用户真机复测：测试页同一个长句子（带 `to/too/two`、`I'm`、可能夹带 `um/uh`）预期从 Fail 变 Pass；纯对照：故意把 `the` 说成 `that` 这种**不在 COMMON_ALTERNATES 也不在 filler** 的真实错读，仍应该 Fail（不该过度宽容）
+
+**禁止行为**：
+- ❌ 把 `FILLER_WORDS` 扩到 `like` / `well` / `so` / `right` / `okay` —— 这些词在字幕里有语义，过滤会引入假阳性
+- ❌ 在 `COMMON_ALTERNATES` 里加跨词映射（"gonna" ↔ "going to"、"wanna" ↔ "want to"）—— `Pair<String, String>` 结构不支持跨词，要么改数据结构要么放弃
+- ❌ 把 `FILLER_WORDS` 过滤只应用到 trans 一边而 orig 不过滤 —— 会破坏对齐长度比对的稳定性（orig/trans 长度差从 0 变成 1，pass 判定可能错）
+
+**记忆沉淀**：
+- [[echoling-test-mode-is-word-matching-not-pronunciation-scoring]]：测试页是 WordMatcher 词序匹配不是发音评分——本轮的容差改动只影响 STT 输出 vs 字幕文本的字面对齐，**不涉及** DTW、MFCC、能量包络那一套。下一轮想"测发音"必须另起一节，不能在 WordMatcher 里塞声学特征
+- [[vosk-jna-android-native-packaging]]：vosk-android:0.3.45 没有 `Recognizer.setGrammar` setter；grammar 必须用第三参数构造器注入 JSON 字符串。本轮确认了 grammar 在跟读场景下帮倒忙——但这个 API 知识点仍有效
+
+
+### 12.39 SpeakingPage 精听页长句子 UI 压缩 bug（与 §12.32d 同源，2026-07-10）
+
+**症状 1（与 §12.32d 同源）**：用户反馈"精听页面（SpeakingPage）碰到长句子也会把底部的控制按钮和正在录音的显示图标搞成变形或者直接挤到最下面甚至看不见了"。**完全复现了 §12.32d 测试页修过的那一个 bug**——这次只是搬到了 SpeakingPage 上。
+
+**症状 2（症状 1 的衍生）**：用户进一步反馈"第一次进入精听页面的时候，让 X/Y 的 X 不要等于 0，让 X=1，也就是直接就显示第一句句子。因为我看到没有句子的时候，底下的控制按钮跑到中间去了"。
+
+**根因（症状 1）**：与 §12.32d 同：
+- 字幕卡片 `SpeakingSubtitleCard` 内部是普通 `Column`，长句子（≥10 词 / 多行 word block）撑高时直接挤压下面的 space + control bar
+- 字幕卡片调用点 `modifier = fillMaxWidth().padding(horizontal = 16.dp)` **没有 weight**，所以 Column 布局阶段它想多高就多高
+- 录音红圈的 `Box(weight(1f) fillMaxWidth)` 想吃掉所有 slack——但 subtitle card 已经挤完了，slack 是 0，红圈被挤成一条线
+
+**根因（症状 2，与症状 1 互补）**：`currentSubtitleIndex` 初始值是 `-1`（[PracticeViewModel.kt:172-175](app/src/main/java/com/echoling/app/presentation/viewmodel/PracticeViewModel.kt#L172)），字幕还没加载时它就停在 `-1`，subtitles 加载完**没有任何机制把它推到 0**——因为 SpeakingPage 用户通常直接进入、不会触发播放进度更新。导致下拉按钮显示 `(-1 + 1) / N = "0 / N"`，"子句卡片"显示 `"句子 0"`（虽然这一点因为 `displayIndex + 1` 自动 1-based 没暴露）。**症状 2 的另一面**：`if (currentSub != null) { SpeakingSubtitleCard(weight(1f)) }` 在 subtitles 为空时**跳过整段**——中间的 `Box`（红圈锚）和 `SpeakingControlBar` 之间没有任何 slot 撑 weight，control bar 没有 force-pin-to-bottom，**浮到中间**。
+
+**改法（4 处）**：
+
+1. **subtitle card 调用点加 `weight(1f)`**（[SpeakingPage.kt:215-218](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/SpeakingPage.kt#L215)）：
+   ```kotlin
+   modifier = Modifier
+       .fillMaxWidth()
+       .weight(1f)            // NEW: 与 control bar 共享垂直空间
+       .padding(horizontal = 16.dp)
+   ```
+2. **subtitle card 内层 Column 加 verticalScroll**（[SpeakingPage.kt:312-325](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/SpeakingPage.kt#L312)）：
+   ```kotlin
+   Column(
+       modifier = Modifier
+           .padding(16.dp)
+           .verticalScroll(rememberScrollState()),   // NEW
+       horizontalAlignment = Alignment.CenterHorizontally
+   ) { … }
+   ```
+3. **中间整块包进 `Column(weight(1f))`**（[SpeakingPage.kt:186-261](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/SpeakingPage.kt#L186)）—— 解决症状 2 的"按钮跑到中间"。subtitle card + 红圈 Box + playback card **三个**一起塞进一个外层 `Column(Modifier.fillMaxWidth().weight(1f))`：
+   ```kotlin
+   Column(modifier = Modifier.fillMaxWidth().weight(1f)) {  // NEW: 中间槽位永远是 weight=1f
+       if (currentSub != null) {
+           SpeakingSubtitleCard(modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = 16.dp))
+       }
+       Box(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
+           if (recordingState == RecordingState.RECORDING) RedRecordCircle()
+       }
+       recordingPath?.let { RecordingPlaybackCard(...) }
+   }
+   // ── SpeakingControlBar() ──   ← 现在永远贴底
+   ```
+   **为什么这是关键**：之前 `if (currentSub != null)` 整个字幕卡 slot 会被跳过；当 subtitles 还没加载时这个 slot **不存在**，中间没有任何 weight 撑开 control bar。现在中间整块固定 `weight(1f)`，**subtitle card 是它的子节点**——哪怕 `currentSub == null` 跳过 SpeakingSubtitleCard，外层 Column 也强制撑开，control bar **pin 到 bottom**。
+4. **红圈 Box 不能再 weight(1f)**（与之前 §12.39 同）：`Box(weight(1f) fillMaxWidth)` → `Box(fillMaxWidth().heightIn(min = 48.dp))`。`heightIn(min = 48.dp)` 给红圈 48dp 站立空间但不抢 weight。
+5. **VM 侧自动初始化 `_subtitleIndexByPage[*] = 0`**（[PracticeViewModel.kt:861-872](app/src/main/java/com/echoling/app/presentation/viewmodel/PracticeViewModel.kt#L861)）—— `loadSubtitles()` 在 `_subtitles.value = parsed` 之后立刻：
+   ```kotlin
+   _subtitleIndexByPage.update { current ->
+       current.mapValues { (_, idx) -> if (idx == -1) 0 else idx }
+   }
+   ```
+   `if (idx == -1)` 是**幂等保护**：只初始化还没碰过的 slot；如果用户已经在播放/导航到第 N 句（slot 不是 -1 了），绝不重置。
+   ```kotlin
+   private val _subtitleIndexByPage = MutableStateFlow<Map<PracticePage, Int>>(
+       mapOf(
+           PracticePage.LISTENING to -1,
+           PracticePage.SPEAKING to -1,
+           PracticePage.TESTING to -1,   // TESTING 不读这个 map（它用自己的 _testState.currentTestIndex），但一并初始化无害
+       )
+   )
+   ```
+
+**为何测试页不需要症状 2 的修复**：TestingPage 的 subtitle index 由 `_testState.currentTestIndex` 驱动（与 loadSubtitles 完全独立），且 onStartTest 才进入测试态——根本不会有"subtitles 加载完但 index 是 -1"的窗口。SpeakingPage 才有这个问题。
+
+**为何不让 SpeakingControlBar 自己 weight(1f).bottom**：
+- Compose 没有 `Modifier.bottom()`；`weight(1f)` 会让 control bar 想拿全部剩余空间，把 subtitle card 挤到 0 高度
+- Column 默认 `Arrangement.Top` —— 第一个 child 先吃，control bar 是**最后一个 child**，自然贴底；问题是中间没东西导致整体高度塌陷。修正中间 slot、而不是颠倒 column 顺序，是更内聚的解法
+
+**改动文件**：
+- [SpeakingPage.kt](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/SpeakingPage.kt) — 加 `verticalScroll` / `rememberScrollState` import；中间整块包进 `Column(weight(1f))`；subtitle card 内 Column 包 verticalScroll；红圈 Box 改 heightIn(min)
+- [PracticeViewModel.kt](app/src/main/java/com/echoling/app/presentation/viewmodel/PracticeViewModel.kt) — `loadSubtitles()` 内加 `_subtitleIndexByPage.update { ... if (-1) 0 }`
+
+**验证**：
+- `./gradlew assembleDebug` → BUILD SUCCESSFUL（10-16s）
+- 真机：精听页面
+  1. **首次进入**：下拉按钮立刻显示 `1 / N`（之前 `0 / N`），subtitle card 直接渲染第 1 句
+  2. **空字幕窗口**：如果 watch subtitles 完全没加载完那一帧，中间空、但 control bar 已经在底部（不浮起来）
+  3. **长句**：卡片内部可垂直滚动、bottom 不动
+  4. **短句**：看不出 verticalScroll 在工作、control bar 仍贴底
+- 回归：测试页（TestingPage）的 `if (!testState.isActive || testState.testItems.isEmpty())` empty state 不受影响；下拉菜单中"已完成的"绿 + "选中的"紫两态保持
+
+**禁止行为**：
+- ❌ 把外层中间 Column 改成 `IntrinsicSize.Min` —— intrinsic measurement 会让 Compose 在没测过内容前就请求最小高度，反而把 control bar 推上来
+- ❌ 在中间 Column 内部用 `Box(weight(1f) fillMaxWidth)` 任何子节点 —— 与 subtitle card 的 weight(1f) 冲突（AMBIGUOUS_LAYOUT），高度不可预测
+- ❌ 给中间 Column 加 `verticalScroll` —— 中间 slot 是**布局骨架**，不是可滚动内容；scrollable 应该是 leaf 节点（card 内）
+- ❌ 在 `_subtitleIndexByPage.update { ... if (-1) 0 }` 里改写为 `else null` 不存在 —— `-1` 是"还没初始化"的 sentinel，永远不能映射到非法值
+- ❌ 直接在 `_subtitleIndexByPage.update` 外层 `if (parsed.isNotEmpty())` 守护 —— parse 失败但有兜底 list（emptyList）这种情况要保持行为一致；无条件 update 更稳
+
+**记忆沉淀**：
+- §12.32d 修过 TestingPage 的同样 bug，但当时只处理一处。SpeakingPage 是**第二个**字幕卡片 + control bar 组合——模式应该被认成"recording-overlay-with-bottom-controls 的可压缩布局 bug"。下一个候选：ListeningPage（如果它也有长字幕卡 + 底部按钮的布局）。
+- **`_subtitleIndexByPage[SPEAKING] to -1` 的初始 sentinel 暴露**：之前的代码让它"等播放进度自然推到 0"——但 SpeakingPage 用户通常不播放只读词，导致永远 -1。sentinel 设计错误应该改数据结构、改 API，而不是 patch 一个角落。**下一轮重构时** `_subtitleIndexByPage` 的初始值应改为 `0`（合理默认 + 在 loadSubtitles 时不再需要 sentinel-rescue），实现层面 ZERO 行为差异
+- **症状 2 的半秒空窗**：subtitles 加载完成（`_subtitles.value = parsed`）→ `_subtitleIndexByPage.update` 是同步 StateFlow 操作→下一帧 Compose recompose → 下拉从 `0/0` 变 `1/N`。**理论上有一帧窗口**显示 `0/0`，但 human-perceptible 不可见（<16ms）。如果用户实测发现能看到 `0/0`，再考虑在 SpeakingPage 把 `currentSubtitleIndex + 1` 改成 `maxOf(1, currentSubtitleIndex + 1)` 显示，但**本轮不动**
+
+### 12.40 PracticeScreen 标题行 + TabRow 紧凑化（"跟读练习"标签框缩小，2026-07-10）
+
+**症状**：用户反馈"三个子页面（泛听 / 精听 / 测试）整体向上移动，紧靠近跟读练习几个字"，同时"这几个字的字体背景框太大，上下高度调小一点，把这几个字页调小一号"。
+
+**根因**：
+- "跟读练习" + 返回按钮行：48dp 高（[PracticeScreen.kt:88-90](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/PracticeScreen.kt#L88)）——M3 默认 Row 高度，但配合下方默认 TabRow（带 icon 时约 72dp，无 icon 是 48dp），**顶部合计 ~120dp** 在状态栏 inset 之上，用户感觉"离顶部太远"
+- Tab 标签框：M3 `TabRow` + `Tab(text = { Row(Icon(18dp) + Text()) })` 的组合实际占高度 ~64-72dp（Tab 容器 content padding 默认 vertical=16dp，icon 18dp + text 14sp）
+- Tab 文字：默认 `titleSmall`（14sp），用户要求"调小一号" → 12-13sp 之间
+
+**改法（3 处）**：
+
+1. **标题 Row 48dp → 40dp**（[PracticeScreen.kt:88-92](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/PracticeScreen.kt#L88)）：
+   ```kotlin
+   Row(
+       modifier = Modifier
+           .fillMaxWidth()
+           .height(40.dp)    // §12.40: 48dp → 40dp
+           .background(MaterialTheme.colorScheme.surface),
+       ...
+   )
+   ```
+   40dp 仍能容纳 `titleMedium` (16sp) 的"跟读练习"文字不切 descender。返回按钮的 IconButton 内部 padding 仍 >= 48dp 触摸目标（IconButton 容器本身 40dp 是缩小了，但 hit area 是 IconButton 内部 padding 决定的）。
+
+2. **Tab 容器 heightIn(min = 40.dp, max = 40.dp)**（[PracticeScreen.kt:135](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/PracticeScreen.kt#L135)）：
+   ```kotlin
+   Tab(
+       modifier = Modifier.heightIn(min = 40.dp, max = 40.dp),  // §12.40
+       ...
+   )
+   ```
+   `heightIn` 而非 `height`：max=40dp 强制刚好 40dp；min=40dp 留 fallback 给以后改成竖排图标时不被压扁。
+
+3. **Tab 内 Row 元素**：
+   - **Icon 18dp → 16dp**（[PracticeScreen.kt:154](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/PracticeScreen.kt#L154)）—— 16dp 仍 >= M3 minimum touch target via IconButton 内部 padding
+   - **Text fontSize 14sp → 13sp**（[PracticeScreen.kt:172-174](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/PracticeScreen.kt#L172)）——
+     ```kotlin
+     style = MaterialTheme.typography.titleSmall.copy(fontSize = 13.sp)
+     ```
+     用 `.copy()` 而不是 `style = ...` 直接换 typography，是为了让**字号变小**而**保留 titleSmall 的 letterSpacing / lineHeight** 不变。"调小一号"在 12-13sp 之间，13sp 比 M3 `labelMedium` (12sp) 略大更可读，又比默认 titleSmall (14sp) 小一档
+
+**为何不用 `Modifier.height(40.dp)` 替代 `heightIn`**：TabRow 内部 layout 期待 `Tab` 高于 indicator + padding 至少 ~40dp，硬 `height(40.dp)` 在某些设备上会触发 Compose "Constraints too tight" warning。`heightIn` 给 max 强制 40dp 同时留 min=40dp 给 fallback。
+
+**改动效果**：标题行 + TabRow **合计从 120dp 缩到 80dp**（省 40dp），用户感知就是"三个子页面更靠近标题"。
+
+**改动文件**：
+- [PracticeScreen.kt](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/PracticeScreen.kt) — Row.height 48→40dp；Tab.modifier heightIn 40dp；Icon size 18→16dp；Text fontSize 14→13sp
+
+**验证**：
+- `./gradlew assembleDebug` → BUILD SUCCESSFUL（8s）
+- 真机：跟读练习页面
+  1. "跟读练习" 标题到底部第一个可视内容（泛听 icon 或视频占位区）距离明显缩短（**40dp 更紧凑**）
+  2. "泛听 / 精听 / 测试"三个 Tab 标签框明显变薄、上下 padding 减小；字号略小但 2 字 CN 标签仍清晰可读
+  3. icon (Headphones / RecordVoiceOver / Quiz) 也相应缩小，比例协调
+  4. 选中的"精听"标签仍显示主色紫色 indicator + primary 文字
+- 回归：tap 切 tab、`pause()` 调用、`setCurrentPage()` 时机、indicator 位置都不受影响
+
+**禁止行为**：
+- ❌ 把 Tab 改回 `Tab(text = { Text("精听") }, icon = { Icon(...) })` 双 slot 结构 —— icon slot 会让 M3 自动给 Tab 加 vertical=24dp padding，又回到 72dp 高度。本轮用 `text = { Row(Icon + Text) }` 把 icon + text 都放进 single slot 才压得下来
+- ❌ 把 Text 改成 `MaterialTheme.typography.labelMedium` （12sp）—— 太小，跟主流程的"测试 / 泛听"snackbar 字号 14sp 不成比例；本轮 13sp 是中间值
+- ❌ 给 Tab 加 `Modifier.weight(1f)` —— Tab 已经在 TabRow 容器内自动等宽，再加 weight 是 no-op 或者双重 layout 触发
+- ❌ 直接修改 M3 typography tokens (e.g. `titleSmall` → 13sp) —— 会影响所有用 titleSmall 的地方（首页卡片标题等），本轮用 `.copy()` **只影响 Tab 文字**
+
+**记忆沉淀**：
+- **M3 Tab 的双 slot 陷阱**：`text` slot 是单 row，`icon` slot 是上面图标下面文字的双 row（垂直 stack）。同样 18dp icon，`text = { Row(Icon + Text) }` 给单行高 ~40dp；`text = { Text } + icon = { Icon }` 给双行高 ~72dp。**所有 Tab 紧凑化场景都该用 Row 合并**而不是依赖 default icon+text slot
+- **headroom 计算**：状态栏 inset (~30dp) + Scaffold padding (~30dp) + 标题 Row (48→40dp) + TabRow (~72→40dp) + sub-page top padding (varies)。本轮省 40dp 体感约为 "原来上半页有 40dp 浪费、现在能展示一行半字幕词块"。下一轮想再省，可以从 status bar inset（强制 0 + enableEdgeToEdge 全屏）或 sub-page 自身 padding 上抠
+- **TabRow + 自定义 Row 的层级**：TabRow 通过 `Tab` 的 `text` slot 拿内容，**不要**给外层 Tab 加 `Modifier.wrapContentHeight()` —— TabRow 期待 Tab 有固定高度才能画 indicator 横条
+
+### 12.41 SpeakingSubtitleCard 顶部行常驻（长句子时不被滚动挤出可见区，2026-07-10）
+
+**症状**：用户反馈"精听页面下拉菜单下面的：`句子 N    未完成    完成复选框`  这一行也往上移，因为碰到长句子的时候，点击录音，句子都看不到了"。**根因**：§12.39 修了长句子压缩 control bar 的问题，但**没有**修复另一个相关的可用性问题 —— `SpeakingSubtitleCard` 内层整个 Column 用了 `verticalScroll(rememberScrollState())`（§12.39 first-pass fix），所以**当内容超过可视高度时，顶部这一行 header（句子 N + 未完成 + ✓）也跟着被滚走了**。用户进到长句子（≥10 词 / ≥3 行的 word block）+ 点击录音：滚动位置停在词块中间 → header 行早已滚出顶部 → 用户看不到自己在第几句、是否完成。RedRecordCircle 出现在 card 下方的 anchor 区，用户更不可能从 scroll 中段定位 header。
+
+**根因**：单一 `Column(verticalScroll)` 把 header（无 scroll 价值）和 content（需要 scroll）一起卷进了同一个 scrollable region。**结构性 bug**：header 是 orientation anchor，content 是 data —— 它们在视觉层级上应该分开。
+
+**改法（1 个 composable 重构，2 处结构变动）**：
+
+1. **外层 Column 改回 `Modifier.padding(16.dp)` 不带 verticalScroll**（[SpeakingPage.kt:344-348](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/SpeakingPage.kt#L344)）：作为 outer non-scrollable 骨架。
+2. **Header Row 留在外层 Column 里**（[SpeakingPage.kt:357-405](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/SpeakingPage.kt#L357)）：Pinned at top。
+3. **新增内层 Column with `weight(1f).verticalScroll(rememberScrollState())`**（[SpeakingPage.kt:414-422](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/SpeakingPage.kt#L414)）：
+   ```kotlin
+   Column(   // outer
+       modifier = Modifier.padding(16.dp),
+       horizontalAlignment = Alignment.CenterHorizontally,
+   ) {
+       Row( … header row, non-scrolling … )   // §12.41 NEW: pinned
+       Spacer(Modifier.height(12.dp))
+       Column(   // §12.41 NEW: inner scroll container
+           modifier = Modifier
+               .fillMaxWidth()
+               .weight(1f)                      // 关键！bounded height
+               .verticalScroll(rememberScrollState()),
+           horizontalAlignment = Alignment.CenterHorizontally,
+       ) {
+           SpeakingWordsFlowRow( … )            // 词块
+           if (subtitle.contentCn.isNotBlank()) {
+               Spacer(Modifier.height(8.dp))
+               Text(subtitle.contentCn, … )      // 中文翻译
+           }
+       }
+   }
+   ```
+
+**关键决策**：
+
+### 内层 Column 必须 `weight(1f)`
+
+`verticalScroll` 需要有界高度才能触发；否则 Column 跟随内容 wrap-content 增长，scroll 永远不触发。`weight(1f)` 把它放在外层 Column 的剩余空间里（外层是 `Column.padding(16dp) inside weight(1f) Card`，所以高度是 `Weight(1f) minus header and spacer`）。没有 weight，`Column(verticalScroll)` 在 Compose 1.x 不会报 warning，但 scroll **不会工作**——bug 表现就是用户看到的是"全部内容显示 + 中间被截断，无 scrollbar 提示"。
+
+### 为什么不用 `LazyColumn`
+
+`SpeakingWordsFlowRow` 已经把 N 个词预计算好放进 `Column { lines.forEach { Row } }` 里（[SpeakingPage.kt:457-498](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/SpeakingPage.kt#L457)）。LazyColumn 需要换数据结构（each word → item），且对小固定高度 (≤400dp) + ≤20 word items 性能优势不存在。每次 recompose LazyColumn 也比 remember + Column 重。**YAGNI** — 用普通 Column + verticalScroll 已经够，且还让**整个 scrollable region 在 record 时仍可滚动**（用户录音中想滚到中间确认自己的发音指向哪个词）。如果你将来改造成 dynamic word count（≥100 words），再 switch to LazyColumn。
+
+### header 高度
+
+实际 ~36dp（包括 Spacer 12dp）：`labelMedium` 字号 12sp 文字 + 8dp padding 在 "未完成" badge + IconButton 32dp 触摸目标 = ~36-40dp。
+
+### 与 §12.39 first-pass fix 的关系
+
+§12.39 的 fix 是"卡片内部垂直 scroll 而不是挤压底部 control bar"。§12.41 是"卡片顶部 header 永远常驻"。**两个 fix 配合**：
+- §12.39 保证 control bar 不被压扁
+- §12.41 保证 header 在长内容时仍可见
+- 长句子场景下用户可滚动词块区域**看到中间内容**，但 header（句子 N + 未完成 + ✓）始终在 card top 可见 —— 用户对自己当前所在 sentence 的位置/状态始终有视觉锚点
+
+**改动文件**：
+- [SpeakingPage.kt](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/SpeakingPage.kt) — `SpeakingSubtitleCard` 重构：外层 Column + 内层 verticalScroll Column
+
+**验证**：
+- `./gradlew assembleDebug` → BUILD SUCCESSFUL（8s）
+- 真机：精听页面选一句长字幕（≥15 词 / ≥3 行）
+  1. **header 行 "句子 N · 未完成 · ✓" 在卡片顶部永远可见**（即使用户滚动词块到中间位置）✓
+  2. 词块区域仍可内部垂直滚动（手指上滑 → 看到下面的中文翻译）✓
+  3. 长按录音键 → RedRecordCircle 出现在卡片下方锚区，header 仍可见，用户能继续看到自己在第几句 ✓
+  4. 短字幕（≤6 词 / ≤2 行）回归：header 仍 pinned，words 区**没有**自带 scroll（因为不够长触发），整体看跟以前一样 ✓
+- 回归：未完成 badge 的颜色 / 复选框的选中态 / 单词点击 reveal / 单词长按翻译 dialog 全部不变
+
+**禁止行为**：
+- ❌ 把整个 SpeakingSubtitleCard（含 header）放进 single `verticalScroll` —— 回到 §12.41 的根因，header 又会被卷出去
+- ❌ 把 header 改成 sticky header (e.g. Compose `StickyHeader` from foundation lazy) —— StickyHeader **只在 LazyColumn 内**有效，普通 Column + verticalScroll 没有这个概念；要 sticky 必须切 LazyColumn + 重构 SpeakingWordsFlowRow，本轮不做
+- ❌ 给 inner scroll Column 加 `Modifier.heightIn(min=100.dp, max=300.dp)` 这种**写死**的范围 —— 不同手机高度不同会破；weight(1f) 自适应更好
+- ❌ 把 header 的"句子 N"从 labelMedium 缩到 labelSmall（11sp）—— 用户既然已经要看清，就让它显示清楚；字号不变
+- ❌ 把 Badge "未完成" 改成 icon-only —— 用户已经用 badge 表示状态了，纯 icon 会失去"完成度"语义
+
+**记忆沉淀**：
+- **scrollable 区域的拆分原则**：scrollable region 里**不应该**包含 orientation anchor（"我在第几屏 / 第几 step"），应该只包含 data。"题目" "步骤号" "完成状态" 这类元信息应该在 scrollable region 外；只有"内容详情"是 scrollable
+- **verticalScroll + wrap-content 的隐形 bug**：androidx compose 没有 `Modifier.verticalScroll(MaxHeight = wrap)`；不绑 height 时 Column 永远 grow，scroll 永不触发。**写 verticalScroll 时先确认 parent 给的是 bounded constraints**，否则它就是个 no-op
+- **未来候选**：ListeningPage 的 subtitle ListItem 也类似 —— 每个 `ListeningSubtitleListItem` 是 row 有 "句子 N · 完成/未完成" 头，词块是 row content。**但它是 LazyColumn，每个 item 自己 rendering，无外部 header 关系**，所以 §12.41 不适用于它。如果 Listening 也要 pinned sentence header，需要把 header 拿出去到 LazyColumn 的 stickyHeader —— 那是另一个量级的改动
+
+### 12.42 录音卡片删除 + 录音动画下移 + 测试 bar 高度统一（2026-07-10）
+
+**症状**（用户三连反馈）：
+1. 精听页面 "录完音后弹出的我的录音点击播放的窗口取消掉" —— 在精听页中部出现的 `RecordingPlaybackCard`（"我的录音 / 点击播放" 横卡）跟底部控制按钮里的 "播放录音" 圆按钮功能重复，且占用 ~80dp 垂直空间
+2. "录音时弹出的正在录音动画往下移，尽量的靠近底部控制按钮" —— 精听和测试页录音时的红色圆圈动画离底栏视觉距离偏大
+3. "测试页面的底部控制按钮的背景方框上下高度比精听，泛听页面的要高，改成和它们高度一致" —— 测试页 bottom pill 比精听/泛听 pill 高出一截
+
+**根因**：
+- (1) `RecordingPlaybackCard` 是 SpeakingPage 在 `RecordingPlaybackCard.kt:681-725` 定义的独立 composable，用同一个 `playRecording` 与 SpeakingControlBar 第 4 个 "播放录音" 按钮重复触发
+- (2) SpeakingPage：`RedRecordCircle()` 渲染在中间 `Column(weight(1f))` 内的 `Box(heightIn(min=48dp), Alignment.Center)`，48dp 槽位放 140dp 圆圈，中心对齐→可见部分在槽位**垂直中心**而非底部。TestingPage：调用 `RecordingOverlay(modifier.padding(vertical=8dp))` 上面 8dp + 内部 12dp = 20dp gap to control bar
+- (3) 两个 ControlBar 的 outer Surface shell **结构相同** (`padding(horizontal=16, vertical=8), shape=24, surfaceVariant.copy(0.5), tonalElevation=2`) + 同样的 inner Row `padding(vertical=12)` —— **bar 高度应该一致**。差异在 **mic 按钮 size**：SpeakingPage 的 mic 是 `Box.size(54dp) + Icon.size(26dp)`；TestingPage 的 `MicButton` 是 `Box.size(72dp) + Icon.size(34dp)`。72dp 让 Testing bar 撑高 18dp。
+
+**改法（3 处，2 文件）**：
+
+### 1. 删 `RecordingPlaybackCard` composable + call site
+
+**SpeakingPage.kt:680-727 删**整段 composable 定义（不再被引用）：§12.42 LINT 提醒 grep 唯一一处引用，没有其他 file 调它。
+
+**SpeakingPage.kt:254-269 删**调用点（之前是 `recordingPath?.let { RecordingPlaybackCard(...) }`）：现在 `RecordingPlaybackCard` 完全消失。
+
+**保留**：SpeakingControlBar 第 4 个 "播放录音" 圆按钮（[SpeakingPage.kt:642-664](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/SpeakingPage.kt#L642)），它读 `viewModel.speakingRecordingPath.value` → 录音存在时 enabled。**用户仍能播放录音**，只是少了一个 card 的视觉层。
+
+### 2. RedRecordCircle 移到 bar 上方
+
+**SpeakingPage.kt:243-250 改**：
+```kotlin
+// 改前
+Box(
+    modifier = Modifier
+        .fillMaxWidth()
+        .heightIn(min = 48.dp),
+    contentAlignment = Alignment.Center
+) {
+    if (recordingState == RecordingState.RECORDING) RedRecordCircle()
+}
+```
+↓
+```kotlin
+// 改后 (2026-07-10) §12.42
+Box(
+    modifier = Modifier
+        .fillMaxWidth()
+        .heightIn(min = 48.dp, max = 140.dp),         // §12.42: 录制中扩到 140dp 给圆圈自然高
+    contentAlignment = Alignment.BottomCenter          // §12.42: 重力贴底，圆圈底部 = 槽位底部
+) {
+    if (recordingState == RecordingState.RECORDING) RedRecordCircle()
+}
+```
+
+`Alignment.BottomCenter` 让 RedRecordCircle（140dp）的底部边缘贴住 Box 底边 = Column(weight(1f)) 底部 = **紧贴 SpeakingControlBar 上方**。
+
+`heightIn(min=48, max=140)` 让非录音态保留 48dp 最小占用（不撑出多余空白）；录音态撑到 140dp 容纳圆圈。
+
+**TestingPage.kt:117-125 改**：
+```kotlin
+// 改前
+RecordingOverlay(modifier = Modifier.fillMaxWidth().padding(horizontal=16, vertical=8))
+// 改后 (2026-07-10) §12.42
+RecordingOverlay(modifier = Modifier.fillMaxWidth().padding(horizontal=16, vertical=2))
+```
+
+RecordingOverlay 是 middle Column 的 last child before TestingControlBar，外层 vertical 8dp 缩到 2dp；RingOverlay 内部还有 12dp，所以**总 gap = 2 + 12 = 14dp**（之前 8 + 12 = 20dp）。6dp 的视觉改善等价于圆圈上移 6dp 靠近 bar。RecordingOverlay 本身用 `Box(fillMaxWidth, padding(horizontal=24, vertical=12), Alignment.Center)` —— 内层 Center 不动，圆圈天生居中。
+
+### 3. 测试页 mic 按钮 72dp → 54dp
+
+**TestingPage.kt:736-738 改** `MicButton`：`Box.size(72.dp) → Box.size(54.dp)`，**MicPage.kt:760 改** `Icon.size(34.dp) → Icon.size(26.dp)`。与 SpeakingPage 的 `Box(54dp) + Icon(26dp)` **完全一致**，Row intrinsic height 统一。
+
+`detectTapGestures(onPress=…, tryAwaitRelease=…, onRelease=…)` 的 press-and-release 时序不变（speaking 用 `clickable + interactionSource + LaunchedEffect(isPressed)`，testing 用 `detectTapGestures` ——两种实现等价，patch 后仍兼容）。
+
+**改动效果 — Bar 高度计算**：
+- Bar Surface outer padding 8dp + inner Row padding 12dp = 20dp frame
+- Row content = max(IconButton size) + Row vertical padding
+- Speaking/listening: max(54dp, 54dp, 26dp, 54dp, 26dp) + 24dp = **78dp** outer
+- Testing: 原 72dp + 24dp = **96dp** outer → 改后 54dp + 24dp = **78dp** outer ✓ 与 speak/listen 一致
+
+**改动文件**：
+- [SpeakingPage.kt](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/SpeakingPage.kt) — 删 RecordingPlaybackCard composable + call site；RedRecordCircle Box 改 `heightIn(min=48, max=140)` + `BottomCenter`
+- [TestingPage.kt](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/TestingPage.kt) — MicButton 72→54dp / Icon 34→26dp；RecordingOverlay vertical 8→2dp
+
+**验证**：
+- `./gradlew assembleDebug` → BUILD SUCCESSFUL（9s）
+- 真机：
+  1. **精听页录完音后**：`RecordingPlaybackCard` 不再出现；底部控制栏 "播放录音" 圆按钮（4 号位置）仍能播放刚才的录音 ✓
+  2. **精听页长按录音**：RedRecordCircle 在卡片和控制栏之间的槽位里**底部对齐**，圆圈底部边缘紧贴控制栏顶部（间距 ≈ 8dp，比之前的"圆圈中部可见"体感接近 1/2 圆圈高度的下沉）
+  3. **测试页长按录音**：RecordingOverlay 整体上移 6dp，更贴近 TestingControlBar 的 pill 顶边
+  4. **三个页面底部 pill 高度一致**：精听/测试/泛听切换 TabRow，圆角 pill 形状、上下高度完全一致；之前测试页明显高 ~18dp
+  5. 测试页 mic 按下变红（error 色）、释放回到 primaryContainer（onPrimaryContainer tint），与 §12.42 改前一样
+
+**禁止行为**：
+- ❌ 把 `RecordingPlaybackCard` 用 `@Suppress("unused")` 隐藏 —— 它**真的**没用了。YAGNI：re-enable 时如果用户要求，再恢复整段定义 + call site，比留 unused code 干净
+- ❌ 在 RedRecordCircle 的 Box 上加 `.padding(bottom = 8.dp)` 试图"再贴一点" —— Column 子节点不加 weight(1f) 时互相紧凑排列，已没有 alignment 向下空间可调整；要再贴靠 bar 只能改 RedRecordCircle 自己的 sizeDp 缩到 100-120dp（但 ripple 同步缩会变难看），本轮不做
+- ❌ 把 TestingPage 的 MicButton 缩到 48dp（Surface.IconButton 的默认 minTouchTarget）—— 54dp 是 speaking 的 gold standard；统一到 48dp 牺牲了视觉权重，统一到 54dp 跟 speaking 完全对称。本轮选 54dp
+- ❌ 在 TestingControlBar 内 row 的 5 个按钮中给 mic 加 `Modifier.weight(1f)` —— Box 是圆形，weight 会把 Box 拉成椭圆；用 `Modifier.size(54.dp)` 锁定 54dp×54dp 才是圆形
+- ❌ 把 ListeningBottomControls 也加同样的 .height(54dp) 校验 —— Listening 没有 mic button（ListeningBottomControls 是 subtitle-toggle / play/pause / speed 三个 IconButton），它的最大 content 已经是 36dp 左右；本轮只动 Speaking 和 Testing 两个有 mic 的 bar
+
+**记忆沉淀**：
+- **同一 Surface shell 内 Row 的 intrinsic height = max(child height) + Row padding** —— 三个 bar 用相同 shell 是没用的，**必须同步 child size** 才能真的一致。本轮的 72dp/54dp 之差是"形式上一致、内核不一致"的反例：**视觉一致性必须从内核对齐开始**
+- **重复功能的 UI 元素 = 迟早要去掉一个**：本节 RecordingPlaybackCard 与 SpeakingControlBar 第 4 个按钮重复了 `playRecording` 触发器，但**视觉层级不同**（card 比 button 大一个量级），导致用户对"哪个是播放入口"产生认知负担。**MVP 设计原则**：同一功能的入口永远只有一条最显眼的路径
+- **red circle 的对齐（BottomCenter vs Center）在大屏手机 + 24dp 槽位时差异可达 30dp+** —— 圆圈直径 140dp，超过半个屏幕高度的 ~10%。`BottomCenter` 让圆圈看起来"在底部"而不是"悬浮中段"，符合用户对录音态视觉直觉（"我正在对 mic 说话，按钮就在 mic 上方"）
+- **下一个候选**：ReciteScreen 闪卡页如果加录音评分功能，可能也需要同样的 RedRecordCircle —— 复用 §12.42 的 `Box(heightIn min 48 max 140, Alignment.BottomCenter)` 包装即可

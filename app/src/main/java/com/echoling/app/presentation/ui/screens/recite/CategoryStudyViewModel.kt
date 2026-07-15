@@ -254,6 +254,36 @@ class CategoryStudyViewModel @Inject constructor(
     }
 
     /**
+     * (2026-07-04) Speak the current example sentence aloud. Triggered
+     * by the speaker button next to the EN sentence on the flashcard
+     * front. No-op if there is no current word, or if the source JSON
+     * didn't carry an English sentence for this entry (some short
+     * multi-word phrases lack one entirely).
+     *
+     * The sentence is stripped of any `<b>...</b>` tags before being
+     * handed to TTS — those tags are visual markers for the
+     * flashcard UI ("make headword bold"), they have no audible
+     * meaning, and Google's TTS engine reads the literal characters
+     * ("less-than b greater-than younger less-than slash b greater-than")
+     * which is unintelligible.
+     *
+     * Same TTS-unavailable fallback as [pronounceCurrent]: sets
+     * [CategoryStudyUiState.ttsUnavailableMessage] instead of speaking.
+     */
+    fun pronounceCurrentSentence() {
+        val sentence = _uiState.value.currentWord?.exampleSentenceEn
+            ?.takeIf { it.isNotBlank() }
+            ?: return
+        if (!ttsManager.isAvailable.value) {
+            _uiState.value = _uiState.value.copy(
+                ttsUnavailableMessage = "设备未安装 TTS 引擎，请到应用商店安装「Google 文字转语音」或「讯飞语音」后再试"
+            )
+            return
+        }
+        ttsManager.speak(sentence.replace(Regex("<[^>]+>"), ""))
+    }
+
+    /**
      * Clear [CategoryStudyUiState.ttsUnavailableMessage] after the
      * screen has shown the snackbar, so a subsequent tap re-fires it.
      */

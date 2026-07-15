@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Echo Ling</string>
+    <string name="app_name">听言英语</string>
 
     <!-- Bottom navigation tab labels -->
     <string name="tab_courses">首页</string>
@@ -18,9 +18,20 @@
     <string name="me_title">听言英语</string>
     <string name="me_subtitle">— Listen and Speak Daily —</string>
 
-    <!-- Pronunciation grading (跟读评分). Phase 3 of the practice plan. -->
+    <!-- Vocabulary tab top bar title (mirrors Courses two-line layout).
+         Title "单词本" uses 3sp letter-spacing for the three Chinese
+         characters (more breathable, matches Courses's 18sp/3sp style). -->
+    <string name="vocabulary_title">单词本</string>
+    <string name="vocabulary_subtitle">— Review words daily —</string>
+
+    <!-- Recite (记单词) tab top bar title (mirrors Courses two-line
+         layout). Title "记单词" uses 3sp letter-spacing. -->
+    <string name="recite_title">记单词</string>
+    <string name="recite_subtitle">— Learning words daily —</string>
+
+    <!-- Pronunciation grading (跟读对比). Phase 3 of the practice plan. -->
     <string name="grade_accuracy">准确度</string>
-    <string name="grade_btn_start">开始跟读评分</string>
+    <string name="grade_btn_start">开始跟读对比</string>
     <string name="grade_clarity">清晰度</string>
     <string name="grade_completeness">完整度</string>
     <string name="grade_fluency">流利度</string>

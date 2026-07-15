@@ -7,10 +7,11 @@ import javax.inject.Singleton
 
 /**
  * Returns every word in the bundled local dictionary as a stable,
- * alphabetically-sorted snapshot. Drives the flashcard iteration in the
- * Learning screen — the lookup flow ([LookupWordUseCase]) only ever
- * touches a single word, so this is the read path that needs an
- * explicit "give me the lot" entry point.
+ * alphabetically-sorted snapshot. Drives the flashcard iteration in
+ * the Recite screen. [LookupWordUseCase] is the single-word lookup
+ * companion (used by the long-press translate flow in practice
+ * pages); this is the "give me the lot" read path that
+ * [CategoryStudyViewModel] needs to iterate flashcards.
  *
  * The repository's lazy load + HashMap cache means the first call
  * pays the one-time asset parse (tens of ms), and subsequent calls

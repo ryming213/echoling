@@ -95,7 +95,13 @@ private fun StatCell(
         Spacer(modifier = Modifier.height(4.dp))
         Text(
             text = value,
-            style = MaterialTheme.typography.titleLarge,
+            // titleLarge (22sp) → titleMedium (16sp): shrink the stat
+            // number so the stats row reads lighter — the card is
+            // sitting right under the deep-purple Hero and the big
+            // 22sp numerals were competing with the hero's 22sp course
+            // title. Still 4sp bigger than the 12sp label below, so the
+            // value>label hierarchy is preserved.
+            style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onPrimaryContainer,
         )
         Text(

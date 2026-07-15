@@ -34,6 +34,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -167,11 +168,30 @@ fun CategoryStudyScreen(
                         onPrev = viewModel::skipToPrevious,
                         onNext = viewModel::skipToNext,
                         onPronounce = viewModel::pronounceCurrent,
+                        // (2026-07-04) new — speaks the example sentence
+                        // for the speaker button on the flashcard front.
+                        onPronounceSentence = viewModel::pronounceCurrentSentence,
                     )
                 }
             }
         }
     }
+
+    // (2026-07-04) "已加入单词本" confirmation surfaced as a snackbar
+    // — earlier today this was an AlertDialog, but the user found
+    // a blocking dialog disruptive mid-flip (the user has just
+    // tapped "加入单词本" and the card is about to advance; forcing
+    // a "确定" tap to dismiss is too much). Back to a transient
+    // snackbar, but the snackbar's `containerColor` is themed to
+    // `surfaceVariant` (light gray) via the custom `snackbar` slot
+    // on `SnackbarHost` below — same muted tone the dialog had, so
+    // the visual signal still reads as "different from a default
+    // info toast" without the blocking modal interaction.
+    //
+    // Lifecycle: snackbar appears, M3 auto-dismisses after
+    // `SnackbarDuration.Short` (~4s), then we call
+    // `consumeLastSaved()` to clear the state field. A second tap
+    // on "加入单词本" re-fires it from the new word.
 }
 
 @Composable
@@ -185,6 +205,8 @@ private fun StudyBody(
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onPronounce: () -> Unit,
+    // (2026-07-04) new — plays the example sentence via TTS.
+    onPronounceSentence: () -> Unit = {},
 ) {
     val current = uiState.currentWord ?: return
     Column(
@@ -220,6 +242,9 @@ private fun StudyBody(
                 isFlipped = uiState.isFlipped,
                 onClick = onFlip,
                 onPronounce = onPronounce,
+                // (2026-07-04) new — drives the speaker button on
+                // the front face's example-sentence row.
+                onPronounceSentence = onPronounceSentence,
                 modifier = Modifier
                     .padding(horizontal = 32.dp)
                     .fillMaxWidth()
@@ -233,10 +258,24 @@ private fun StudyBody(
         // pops up. Hosting it inline here keeps the confirmation in
         // the user's eye line (right above the button they just
         // tapped) and far from the navigation row at the bottom.
+        //
+        // (2026-07-04) Custom `snackbar` slot overrides M3's default
+        // container color (which is `inverseSurface` — near-black) with
+        // `surfaceVariant` (light purple-tinted gray) per the user's
+        // "背景色改为浅灰色" request. The text color switches to
+        // `onSurfaceVariant` to keep AA contrast on the lighter
+        // background; M3's default `inverseOnSurface` would render the
+        // text light on light and be unreadable.
         SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier.padding(bottom = 4.dp),
-        )
+        ) { data ->
+            Snackbar(
+                snackbarData = data,
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -355,6 +394,9 @@ private fun FlashCard(
     isFlipped: Boolean,
     onClick: () -> Unit,
     onPronounce: () -> Unit,
+    // (2026-07-04) new — passed through to CardFront for the
+    // speaker button on the example-sentence row.
+    onPronounceSentence: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     // Drive a continuous 0..180° rotation off [isFlipped]. We use
@@ -417,6 +459,9 @@ private fun FlashCard(
             CardFront(
                 entry = entry,
                 onPronounce = onPronounce,
+                // (2026-07-04) new — wires the front's sentence
+                // speaker button to the ViewModel's sentence TTS call.
+                onPronounceSentence = onPronounceSentence,
                 modifier = Modifier.graphicsLayer {
                     rotationY = if (showBack) 180f else 0f
                     alpha = if (showBack) 0f else 1f
@@ -438,13 +483,28 @@ private fun FlashCard(
 private fun CardFront(
     entry: DictEntry,
     onPronounce: () -> Unit,
+    // (2026-07-04) new — drives the speaker button on the
+    // example-sentence row, sitting to the right of the English
+    // sentence. Tapping it speaks the sentence aloud via TTS.
+    onPronounceSentence: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier.fillMaxSize()) {
+        // Main content (word + example sentences) centered. The
+        // hint "点击卡片查看翻译" is rendered as a separate sibling
+        // anchored to the bottom of the card — see below.
+        //
+        // (2026-07-05) Horizontal padding split out from the
+        // uniform 20dp so the left-aligned example sentence below
+        // can run closer to the card edges. The word + speaker row
+        // is centered horizontally so it isn't visually affected
+        // by the wider container — only the English sentence and
+        // its TTS button (which use fillMaxWidth + Start / the
+        // Column's CenterHorizontally) gain the extra room.
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(20.dp),
+                .padding(start = 12.dp, end = 12.dp, top = 20.dp, bottom = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
@@ -460,9 +520,16 @@ private fun CardFront(
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // (2026-07-05) headlineMedium (28sp) → headlineSmall (24sp) per
+                // user request — one step down in the M3 headline scale.
+                // The word stays the focal point of the front face but
+                // no longer overwhelms the example sentence below it
+                // (which is bodyMedium / 14sp). The Bold weight is
+                // kept so the word still reads as "primary signal"
+                // even at the smaller size.
                 Text(
                     text = entry.word,
-                    style = MaterialTheme.typography.headlineMedium,
+                    style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                     maxLines = 2,
@@ -482,13 +549,98 @@ private fun CardFront(
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "点击卡片查看翻译",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
-            )
+
+            // (2026-07-04) English example sentence on the front.
+            // Layout split per user's request: the front now holds
+            // ONLY English content (word + EN example), the back
+            // holds ONLY Chinese / pronunciation content (phonetic +
+            // word translation + CN example translation). This keeps
+            // each face linguistically pure and prevents long
+            // translations from squeezing the front.
+            //
+            // (2026-07-05) Sentence layout reshaped: the text is
+            // left-aligned (fillMaxWidth + TextAlign.Start) so long
+            // sentences have a clean left edge as they wrap, and the
+            // TTS speaker button now sits BELOW the sentence,
+            // centered horizontally (the parent Column already has
+            // `horizontalAlignment = CenterHorizontally`, so the 32dp
+            // IconButton centers itself without an extra modifier).
+            // Previous row-with-button-on-right design had the speaker
+            // squeezed against the right edge on long sentences — the
+            // vertical stack reads more naturally and keeps the
+            // button at a predictable x-coordinate regardless of
+            // sentence length.
+            //
+            //   [ English sentence text,   ]
+            //   [ left-aligned, wrapping    ]
+            //              [ 🔊 ]
+            //
+            // Gated on `isNotBlank()` because the source JSON's
+            // coverage isn't 100% — short multi-word phrases often
+            // lack an example entirely. If the EN sentence is blank
+            // we skip both the text AND the speaker button so the
+            // card doesn't render a stranded button below an empty
+            // block.
+            if (entry.exampleSentenceEn.isNotBlank()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                // Sentence — `fillMaxWidth` so multi-line wrap has a
+                // consistent left edge, `TextAlign.Start` so the text
+                // reads from the left rather than centering (which
+                // made long sentences look ragged with the previous
+                // design).
+                Text(
+                    text = entry.exampleSentenceEn,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.9f),
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Start,
+                )
+                // Speaker button — directly under the sentence,
+                // horizontally centered via the parent Column's
+                // `horizontalAlignment = CenterHorizontally`. The
+                // 32dp box / 20dp icon match the back face's
+                // phonetic/word speakers so the card has a
+                // consistent touch-target vocabulary across faces.
+                IconButton(
+                    onClick = onPronounceSentence,
+                    modifier = Modifier
+                        .padding(top = 4.dp)
+                        .size(32.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.VolumeUp,
+                        contentDescription = "朗读句子",
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+
+            // (2026-07-04) Hint removed from the bottom of the
+            // centered Column — see the bottom-anchored sibling below
+            // for why.
         }
+        // (2026-07-04) Hint is now a sibling of the centered Column,
+        // anchored to the card's bottom edge with `Alignment.BottomCenter`.
+        //
+        // The previous layout put it directly under the Chinese
+        // translation with only an 8dp gap, which made the two read
+        // as one block ("Chinese sentence [hint]") and confused users
+        // into thinking the hint was somehow about the Chinese text.
+        //
+        // Pinning the hint to the bottom of the card — separated from
+        // the centered content by the card's own vertical space —
+        // gives it a clear "this is a UI affordance, not part of the
+        // vocabulary" identity. The 16dp bottom padding keeps the
+        // text from kissing the card's rounded corner.
+        Text(
+            text = "点击卡片查看翻译",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 16.dp),
+        )
     }
 }
 
@@ -566,11 +718,62 @@ private fun CardBack(
             }
         }
         Spacer(modifier = Modifier.height(12.dp))
+        // Translation reads as supporting context for the word, not
+        // the primary signal — so on the back face's
+        // secondaryContainer background we use the muted onSurfaceVariant
+        // for the color and Normal for the weight. The M3 theme
+        // declares titleMedium as SemiBold (600) — see Type.kt:64-70 —
+        // so without the explicit fontWeight override the translation
+        // would render heavier than the phonetic above (bodyMedium,
+        // Normal/400) and the POS chip below, breaking visual
+        // consistency.
+        //
+        // (2026-07-05) Title size downshifted one step from
+        // titleMedium (16sp) → titleSmall (14sp) per user request.
+        // The translation is no longer the visual focal point of the
+        // back face — the multi-line examples and phonetic row above
+        // already carry enough weight, and the previous 16sp read as
+        // "loud" on dense cards. The Normal weight override is kept so
+        // the text stays visually subordinate to the POS chip's Medium
+        // weight, even though they're now the same sp size — the
+        // letter-spacing difference (titleSmall = 0.1sp vs
+        // POS-labelMedium = 0.5sp) is the cue that signals "supporting
+        // text, not a label".
         Text(
             text = entry.translation,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            style = MaterialTheme.typography.titleSmall.copy(
+                fontWeight = FontWeight.Normal,
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
+
+        // (2026-07-04) Example sentence translation (CN). Lives on
+        // the back face alongside the word translation, so the back
+        // is purely the "Chinese / explanation" face:
+        //   [phonetic + 🔊] → [pos chip] → [word translation]
+        //     → [example sentence translation]
+        //
+        // The English example sentence (with its speaker button)
+        // sits on the FRONT face — splitting the languages per face
+        // (English only on front, Chinese only on back) prevents the
+        // long-translation overflow problem we had when both
+        // languages shared one face.
+        //
+        // No maxLines / ellipsis here: long Chinese translations
+        // are fine because the back face has more vertical room now
+        // that it no longer carries the English sentence pair, and
+        // an interrupted CN gloss is worse than a slightly tall
+        // card. The parent Column doesn't clipToBounds so any
+        // extreme overflow stays readable instead of being cut off.
+        if (entry.exampleSentenceCn.isNotBlank()) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = entry.exampleSentenceCn,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                textAlign = TextAlign.Center,
+            )
+        }
     }
 }

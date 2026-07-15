@@ -25,10 +25,6 @@ sealed class Screen(val route: String) {
         fun createRoute(courseId: String) = "practice/$courseId"
     }
     data object Statistics : Screen("statistics")
-    // §12.22: API config moved off the bottom bar but still reachable
-    // from the Me tab as a sub-page, so user-entered translation API
-    // credentials are preserved and the screen remains editable.
-    data object ApiConfig  : Screen("api_config")
     // §12.19: the import screen accepts an optional `courseName` query
     // param. When the user is on a category-detail sub-page and taps
     // the FAB, the parent group name is pre-filled into the form so
@@ -43,6 +39,14 @@ sealed class Screen(val route: String) {
     // §12.21: in-app "使用说明" page. Reached from the home page's
     // top-right Help IconButton.
     data object Instructions : Screen("instructions")
+
+    // (2026-07-04) in-app "权限使用说明" page. Reached from the "我的" tab.
+    // Required by the 国内应用商店 review (华为 / 小米 / OPPO / vivo /
+    // 应用宝) which ask for a built-in privacy / sensitive-permission
+    // disclosure page in addition to whatever is in the store listing.
+    // Only RECORD_AUDIO is currently declared, so the page covers that
+    // one permission + a short confirmation that INTERNET is not used.
+    data object Permissions : Screen("permissions")
 
     // Per-category flashcard study sub-page. Tapping a category card
     // on the "记单词" tab navigates here with the category slug (e.g.
