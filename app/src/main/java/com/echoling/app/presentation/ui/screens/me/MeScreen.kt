@@ -4,27 +4,28 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -32,6 +33,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -69,10 +71,12 @@ import com.echoling.app.presentation.ui.components.PageHeader
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MeScreen(
-    // §12.22: API config moved off the bottom bar — surfaced here as a
-    // tappable card so users can still edit credentials for any future
-    // feature that needs them (e.g. grading API).
-    onNavigateToApiConfig: (() -> Unit)? = null,
+    // (2026-07-04) New — wires the "权限使用说明" entry card below the
+    // ContactCard to a sub-page navigation. TabPagerHost owns the
+    // navController and injects the lambda. Defaulted to a no-op so
+    // future preview surfaces (composable previews, tests) still
+    // compile without a NavController.
+    onNavigateToPermissions: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val version = remember {
@@ -80,6 +84,12 @@ fun MeScreen(
     }
 
     Scaffold(
+        // §12.30: only consume the top status-bar inset, not the bottom
+        // navigation-bar inset. The outer MainScaffold already accounts
+        // for the bottom tab bar, so a second nav-bar subtraction here
+        // would leave a 24dp page-colored strip between the tab bar
+        // and the last list item. See CLAUDE.md §12.30.
+        contentWindowInsets = WindowInsets.statusBars,
         // No topBar — the brand title sits in the PageHeader at the top of
         // the body, right below the status bar (§12.18). Same two-line
         // layout as CoursesScreen's header.
@@ -144,7 +154,7 @@ fun MeScreen(
             Spacer(modifier = Modifier.height(12.dp))
 
             Text(
-                text = "Echo Ling",
+                text = stringResource(R.string.app_name),
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -165,63 +175,98 @@ fun MeScreen(
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            InfoCard(
-                icon = Icons.Default.Info,
-                title = "App Introduction",
-                body = "听言英语是一款专注于英语听力与口语练习的应用。" +
-                        "通过跟读训练、智能断句、逐句播放等功能，帮助用户提升英语听说能力。",
+            // Sections below are flat (no Card background) and
+            // separated by a thin 1dp divider drawn between them.
+            // Same flat treatment as InstructionsScreen §12.21 — see
+            // InfoCard comment for the rationale.
+            //
+            // (2026-07-07) ContactCard reordered to the bottom so the
+            // disclosure-style "Permission Usage" sits closer to the
+            // user-facing product features above, and the call-to-
+            // action "Contact Us" lives at the end of the page where
+            // users reach it after they've read about the app.
+            val sections = listOf<@Composable () -> Unit>(
+                {
+                    InfoCard(
+                        icon = Icons.Default.Info,
+                        title = "App Introduction",
+                        body = "听言英语是一款专注于英语听力与口语练习的应用。" +
+                                "通过跟读训练、智能断句、逐句播放等功能，帮助用户提升英语听说能力。",
+                    )
+                },
+                {
+                    InfoCard(
+                        icon = Icons.Default.Star,
+                        title = "Features",
+                        items = listOf(
+                            "跟读练习 - 智能录音对比",
+                            "逐句播放 - 精准控制进度",
+                            "英文字幕 - 纯英文显示",
+                            "断点续学 - 自动记忆进度",
+                            "本地词典 - 长按取词离线查",
+                            "单词收藏 - 一键保存复习",
+                            "声音识别 - 自动识别复述的句子",
+                        ),
+                    )
+                },
+                {
+                    // §12.24: flashcard feature documentation. Dedicated
+                    // InfoCard (not merged into the Features list above)
+                    // so the two feature groups stay visually separate —
+                    // the icons differ (School vs Star) and users can
+                    // scan them as "Practice features" → "Vocabulary
+                    // features".
+                    InfoCard(
+                        icon = Icons.Default.School,
+                        title = "记单词 · Flashcards",
+                        items = listOf(
+                            "十一大词库 - 小学 / 初中 / 高中 / CET-4 / CET-6 / CET-8 / 考研 / 托福 / GRE / IELTS / BEC",
+                            "方形卡片 - 点击 3D 翻牌查看翻译",
+                            "进度记忆 - 自动保存当前位置和已学数",
+                            "加入单词本 - 不认识的词一键收藏复习",
+                            "进度可视化 - 首页查看每词库已学进度",
+                        ),
+                    )
+                },
+                {
+                    // (2026-07-04) Permissions disclosure card. 国内
+                    // 应用商店 review requires an in-app, user-
+                    // reachable page that lists each sensitive
+                    // permission and explains why the app needs it +
+                    // where the data goes. The card below jumps to
+                    // PermissionsScreen which covers RECORD_AUDIO (the
+                    // only current sensitive permission) and asserts
+                    // that INTERNET is not used at all.
+                    PermissionsCard(onClick = onNavigateToPermissions)
+                },
+                {
+                    ContactCard(context = context)
+                },
             )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            InfoCard(
-                icon = Icons.Default.Star,
-                title = "Features",
-                items = listOf(
-                    "跟读练习 - 智能录音对比",
-                    "逐句播放 - 精准控制进度",
-                    "英文字幕 - 纯英文显示",
-                    "单词收藏 - 一键保存复习",
-                    "断点续学 - 自动记忆进度",
-                    "本地词典 - 长按取词离线查",
-                ),
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // §12.24: flashcard feature documentation. Dedicated InfoCard
-            // (not merged into the Features list above) so the two
-            // feature groups stay visually separate — the icons differ
-            // (School vs Star) and users can scan them as "Practice
-            // features" → "Vocabulary features".
-            InfoCard(
-                icon = Icons.Default.School,
-                title = "记单词 · Flashcards",
-                items = listOf(
-                    "五大词库 - 初中 / 高中 / CET-4 / CET-6 / TOEFL",
-                    "方形卡片 - 点击 3D 翻牌查看翻译",
-                    "进度记忆 - 自动保存当前位置和已学数",
-                    "加入单词本 - 不认识的词一键收藏复习",
-                    "进度可视化 - 首页查看每词库已学进度",
-                    "双 schema 支持 - 嵌套 / 扁平 JSON 自动识别",
-                ),
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // §12.22: API config moved off the bottom bar; tap here to
-            // open the same screen the old API tab used to show.
-            if (onNavigateToApiConfig != null) {
-                ApiConfigLinkCard(onClick = onNavigateToApiConfig)
-                Spacer(modifier = Modifier.height(16.dp))
+            sections.forEachIndexed { index, section ->
+                section()
+                if (index < sections.lastIndex) {
+                    // Thin 1dp rule between sections. Box + background
+                    // instead of M3 HorizontalDivider because the
+                    // latter is a 1.2.0 token and this project pins
+                    // material3 to 1.1.2 (see InstructionsScreen
+                    // §12.21/§12.32b notes on the same pin).
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp)
+                            .height(1.dp)
+                            .background(
+                                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                            )
+                    )
+                }
             }
-
-            ContactCard(context = context)
 
             Spacer(modifier = Modifier.height(32.dp))
 
             Text(
-                text = "© 2024 听言英语\nAll rights reserved.",
+                text = "© 2026 听言英语\nAll rights reserved.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -238,41 +283,37 @@ private fun InfoCard(
     body: String? = null,
     items: List<String> = emptyList(),
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-        ),
-        shape = RoundedCornerShape(16.dp),
-    ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            androidx.compose.foundation.layout.Row(
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-                Spacer(modifier = Modifier.padding(horizontal = 8.dp))
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium,
-                )
-            }
-            if (body != null) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = body,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (items.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(12.dp))
-                items.forEach { item ->
-                    FeatureItem(text = item)
-                }
+    // No background fill — sections on this page are separated by a
+    // thin 1dp divider drawn between them in the parent Column, so
+    // each card reads as "icon + title + body" rather than "a tinted
+    // box". Same flat treatment as InstructionsScreen §12.21.
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(modifier = Modifier.padding(horizontal = 8.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
+        if (body != null) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = body,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (items.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(12.dp))
+            items.forEach { item ->
+                FeatureItem(text = item)
             }
         }
     }
@@ -299,51 +340,81 @@ private fun FeatureItem(text: String) {
 }
 
 @Composable
-private fun ContactCard(context: android.content.Context) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-        ),
-        shape = RoundedCornerShape(16.dp),
-    ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            androidx.compose.foundation.layout.Row(
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Email,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-                Spacer(modifier = Modifier.padding(horizontal = 8.dp))
-                Text(
-                    text = "Contact Us",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                text = "If you have any questions or suggestions, please contact us:",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+private fun PermissionsCard(onClick: () -> Unit) {
+    // Flat layout (no Card background) to match the rest of the page;
+    // see InfoCard comment.
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Mic,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
             )
-            Spacer(modifier = Modifier.height(12.dp))
-            OutlinedButton(
-                onClick = {
-                    val intent = Intent(Intent.ACTION_SENDTO).apply {
-                        data = Uri.parse("mailto:ryming213@sina.com")
-                        putExtra(Intent.EXTRA_SUBJECT, "Feedback for 听言英语")
-                    }
-                    context.startActivity(intent)
-                },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-            ) {
-                Icon(Icons.Default.Email, contentDescription = null)
-                Spacer(modifier = Modifier.padding(horizontal = 8.dp))
-                Text("ryming213@sina.com")
-            }
+            Spacer(modifier = Modifier.padding(horizontal = 8.dp))
+            Text(
+                text = "Permission Usage",
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            text = "查看应用所使用的全部敏感权限、收集的数据与隐私承诺。",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        // TextButton (not OutlinedButton) so the affordance is a
+        // "查看 →" link, matching the lower visual weight of a
+        // disclosure-page entry rather than a primary action like
+        // "Contact Us" below.
+        TextButton(onClick = onClick) {
+            Text("查看权限使用说明 →")
+        }
+    }
+}
+
+@Composable
+private fun ContactCard(context: android.content.Context) {
+    // Flat layout (no Card background) to match the rest of the page;
+    // see InfoCard comment.
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Email,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(modifier = Modifier.padding(horizontal = 8.dp))
+            Text(
+                text = "Contact Us",
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            text = "If you have any questions or suggestions, please contact us:",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = {
+                val intent = Intent(Intent.ACTION_SENDTO).apply {
+                    data = Uri.parse("mailto:ryming213@sina.com")
+                    putExtra(Intent.EXTRA_SUBJECT, "Feedback for 听言英语")
+                }
+                context.startActivity(intent)
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Icon(Icons.Default.Email, contentDescription = null)
+            Spacer(modifier = Modifier.padding(horizontal = 8.dp))
+            Text("ryming213@sina.com")
         }
     }
 }
@@ -352,60 +423,11 @@ private fun resolveVersion(pm: PackageManager, packageName: String): String {
     return try {
         @Suppress("DEPRECATION")
         val info = pm.getPackageInfo(packageName, 0)
-        val name = info.versionName ?: "?"
-        val code = info.longVersionCode
-        "$name ($code)"
+        // 用户 2026-07-08 反馈：Me 页只显示 versionName（如 "1.0"），
+        // 不再拼接 versionCode（如 "(1)"）。versionCode 仍由 build.gradle.kts
+        // 管理，用于商店上传递增；UI 上让版本号更干净。
+        info.versionName ?: "?"
     } catch (e: Exception) {
         "?"
-    }
-}
-
-/**
- * §12.22: tile linking to the API config sub-page. Renders as a
- * settings-style row — left-aligned icon + label, right-aligned
- * chevron — that the user reads as "open settings". The card surface
- * uses the same surfaceVariant container as the other info cards so
- * the visual rhythm of the Me page is preserved.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ApiConfigLinkCard(onClick: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-        ),
-        shape = RoundedCornerShape(16.dp),
-        onClick = onClick,
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.Default.Key,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-            )
-            Spacer(modifier = Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "API 配置",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Text(
-                    text = "句子评分等第三方服务",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Icon(
-                imageVector = Icons.Default.ChevronRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
     }
 }

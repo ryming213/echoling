@@ -5,7 +5,6 @@ import androidx.lifecycle.viewModelScope
 import com.echoling.app.domain.model.Word
 import com.echoling.app.domain.usecase.DeleteWordUseCase
 import com.echoling.app.domain.usecase.GetWordsUseCase
-import com.echoling.app.domain.usecase.ToggleWordMasteredUseCase
 import com.echoling.app.player.TtsManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,7 +16,6 @@ import javax.inject.Inject
 data class VocabularyUiState(
     val words: List<Word> = emptyList(),
     val isLoading: Boolean = true,
-    val showMastered: Boolean = false,
     /**
      * Non-null when the user just tapped a speaker button but the
      * device has no TTS engine installed. Screen reads this and shows
@@ -30,7 +28,6 @@ data class VocabularyUiState(
 @HiltViewModel
 class VocabularyViewModel @Inject constructor(
     private val getWordsUseCase: GetWordsUseCase,
-    private val toggleWordMasteredUseCase: ToggleWordMasteredUseCase,
     private val deleteWordUseCase: DeleteWordUseCase,
     private val ttsManager: TtsManager,
 ) : ViewModel() {
@@ -50,12 +47,6 @@ class VocabularyViewModel @Inject constructor(
                     isLoading = false
                 )
             }
-        }
-    }
-
-    fun toggleMastered(word: Word) {
-        viewModelScope.launch {
-            toggleWordMasteredUseCase(word)
         }
     }
 
@@ -93,16 +84,6 @@ class VocabularyViewModel @Inject constructor(
     fun consumeTtsUnavailableMessage() {
         if (_uiState.value.ttsUnavailableMessage != null) {
             _uiState.value = _uiState.value.copy(ttsUnavailableMessage = null)
-        }
-    }
-
-    fun setShowMastered(show: Boolean) {
-        _uiState.value = _uiState.value.copy(showMastered = show)
-        viewModelScope.launch {
-            val flow = if (show) getWordsUseCase.getAllWords() else getWordsUseCase.getUnmasteredWords()
-            flow.collect { words ->
-                _uiState.value = _uiState.value.copy(words = words)
-            }
         }
     }
 }

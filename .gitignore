@@ -23,3 +23,11 @@ Thumbs.db
 
 # Font files (these are custom, you may want to keep them)
 # res/font/*.ttf
+
+# Release signing — losing keystore/keystore.properties means losing the
+# ability to publish updates under the same package name on 应用商店
+# (signatures must match across versions). Keep encrypted backups.
+# keystore/keystore.properties.example is committed as a template.
+keystore/*.keystore
+keystore/keystore.properties
+!keystore/keystore.properties.example

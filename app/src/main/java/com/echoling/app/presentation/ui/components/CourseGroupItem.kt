@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -94,7 +95,12 @@ fun CourseGroupItem(
                 modifier = Modifier
                     .width(4.dp)
                     .fillMaxHeight()
-                    .background(MaterialTheme.colorScheme.primary),
+                    // §12.32c: accent bar lightened to match the
+                    // new lighter brand purple (#A78BFA) — same
+                    // shade used for the hero gradient and the
+                    // folder icon, so the courses area reads as
+                    // one consistent palette.
+                    .background(Color(0xFFA78BFA)),
             )
 
             Row(
@@ -108,11 +114,17 @@ fun CourseGroupItem(
                     imageVector = Icons.Filled.Folder,
                     contentDescription = null,
                     modifier = Modifier.size(28.dp),
-                    tint = MaterialTheme.colorScheme.primary,
+                    // §12.32c: folder icon tint lightened to
+                    // violet-400 (was the deep primary purple).
+                    tint = Color(0xFFA78BFA),
                 )
                 Text(
                     text = courseName,
-                    style = MaterialTheme.typography.titleMedium,
+                    // titleMedium (16sp) → titleSmall (14sp): keeps
+                    // parity with ContinueLearningCard, CourseListItem,
+                    // and CourseDetailScreen header so the courses area
+                    // reads as one consistent type system.
+                    style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

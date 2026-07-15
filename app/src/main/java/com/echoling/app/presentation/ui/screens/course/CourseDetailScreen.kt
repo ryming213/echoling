@@ -68,7 +68,7 @@ fun CourseDetailScreen(
             ExtendedFloatingActionButton(
                 onClick = onNavigateToImport,
                 icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                text = { Text("导入课程") },
+                text = { Text("导入素材") },
                 containerColor = MaterialTheme.colorScheme.primaryContainer,
                 contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
             )
@@ -83,8 +83,12 @@ fun CourseDetailScreen(
                 onBack = onNavigateBack,
                 title = {
                     Text(
-                        text = uiState.courseName.ifBlank { "课程" },
-                        style = MaterialTheme.typography.titleMedium,
+                        text = uiState.courseName.ifBlank { "练习" },
+                        // titleMedium (16sp) → titleSmall (14sp): keeps
+                        // parity with ContinueLearningCard / CourseGroupItem
+                        // / CourseListItem so the courses area uses a
+                        // consistent title size top-to-bottom.
+                        style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -111,7 +115,7 @@ fun CourseDetailScreen(
                         // hint instead of an error — the home page
                         // will drop this group on the next emission.
                         Text(
-                            text = "暂无课程",
+                            text = "暂无练习",
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.align(Alignment.Center),
@@ -145,8 +149,8 @@ fun CourseDetailScreen(
 
     courseToDelete?.let { id ->
         CompactConfirmDialog(
-            title = "删除课程",
-            message = "确定要删除这个课程吗？",
+            title = "删除练习",
+            message = "确定要删除这个练习吗？",
             confirmText = "删除",
             dismissText = "取消",
             onConfirm = {

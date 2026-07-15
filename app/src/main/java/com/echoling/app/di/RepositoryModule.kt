@@ -1,12 +1,10 @@
 package com.echoling.app.di
 
-import com.echoling.app.data.repository.ApiConfigRepositoryImpl
 import com.echoling.app.data.repository.CourseRepositoryImpl
 import com.echoling.app.data.repository.DictionaryRepositoryImpl
 import com.echoling.app.data.repository.LearningProgressRepositoryImpl
 import com.echoling.app.data.repository.SentenceRepositoryImpl
 import com.echoling.app.data.repository.WordRepositoryImpl
-import com.echoling.app.domain.repository.ApiConfigRepository
 import com.echoling.app.domain.repository.CourseRepository
 import com.echoling.app.domain.repository.DictionaryRepository
 import com.echoling.app.domain.repository.LearningProgressRepository
@@ -37,10 +35,6 @@ abstract class RepositoryModule {
     @Binds
     @Singleton
     abstract fun bindWordRepository(impl: WordRepositoryImpl): WordRepository
-
-    @Binds
-    @Singleton
-    abstract fun bindApiConfigRepository(impl: ApiConfigRepositoryImpl): ApiConfigRepository
 
     @Binds
     @Singleton

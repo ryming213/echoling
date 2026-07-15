@@ -27,7 +27,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
@@ -39,20 +38,28 @@ import androidx.compose.ui.unit.dp
  * the course the user most recently started so they can resume in one tap.
  *
  * Visual recipe (see CLAUDE.md §12.16):
- * - Diagonal gradient from [primary] (top-left) to [tertiary] (bottom-right)
- * - Two faint translucent white radial orbs (top-right + bottom-left) for
- *   depth without distracting from the content
+ * - Solid violet-500 (#8B5CF6) background. Previously (§11.2) a deep
+ *   violet-600 → violet-700 linear gradient (felt too heavy); then
+ *   (§12.32c) a violet-400 → violet-500 linear gradient (felt "灰蒙蒙"
+ *   because the two shades were only ~10% apart in lightness and the
+ *   gradient read as a flat wash). 2026-07-04 settled on solid
+ *   violet-500 — one shade deeper than the §12.32c start, so it has
+ *   more presence than the near-flat gradient did, while staying
+ *   clearly less aggressive than the original §11.2 pair.
+ * - Two faint translucent white radial orbs (top-right + bottom-left)
+ *   for the "depth" feel that a flat color needs to read as a hero
+ *   rather than a sticker
  * - 24dp rounded corners, 4dp tonal elevation, 20dp internal padding
  * - "继续学习" eyebrow row (PlayCircle icon + label, white 85%)
- * - Course title (titleMedium 16sp SemiBold — same as [CourseListItem], white)
- * - 56dp circular play button (white background, primary-purple icon) on
+ * - Course title (titleSmall 14sp — same as [CourseListItem], white)
+ * - 56dp circular play button (white background, violet-400 icon) on
  *   the right of the title row — the visual anchor of the hero
  * - Progress bar with white fill + 25% white track, then "62% 完成" label
  *
  * Tapping the card or the play button calls [onClick]. Visual contrast is
- * intentional: the deep-purple gradient hero is the only saturated card
- * on the page; [StatsSummaryCard] below stays in `primaryContainer` so
- * the eye lands here first.
+ * intentional: the lighter-purple gradient hero is the only saturated
+ * card on the page; [StatsSummaryCard] below stays in `primaryContainer`
+ * so the eye lands here first.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -72,16 +79,24 @@ fun ContinueLearningCard(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(
-                    brush = Brush.linearGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.primary,
-                            MaterialTheme.colorScheme.tertiary,
-                        ),
-                        start = Offset(0f, 0f),
-                        end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY),
-                    ),
-                ),
+                // (2026-07-04) Background went through three states:
+                //   - original: deep violet-600 → violet-700 linear
+                //     gradient (§11.2). User said it felt "too heavy".
+                //   - §12.32c: lightened to violet-400 → violet-500
+                //     linear gradient. User now says it feels "灰蒙蒙"
+                //     — the two shades are only ~10% apart in
+                //     lightness so the gradient reads as a flat muddy
+                //     wash instead of a hero.
+                //   - now: solid violet-500 (#8B5CF6) — mid-bright,
+                //     one shade deeper than the gradient's start so
+                //     it has more presence than the §12.32c palette.
+                //     The radial orb a few lines down (top-right
+                //     translucent white halo) already provides the
+                //     hero "depth" feel; a single solid color lets
+                //     that orb read as an actual highlight instead
+                //     of getting visually lost in a near-flat
+                //     gradient.
+                .background(Color(0xFF8B5CF6)),
         ) {
             // Top-right translucent orb — gives the hero a sense of depth
             Box(
@@ -140,10 +155,13 @@ fun ContinueLearningCard(
                 ) {
                     Text(
                         text = title,
-                        // Match the course-list item title (titleMedium
-                        // 16sp SemiBold) so the two surfaces feel like the
-                        // same card system rather than two unrelated ones.
-                        style = MaterialTheme.typography.titleMedium,
+                        // Match the course-list item title (titleSmall
+                        // 14sp) so the two surfaces feel like the same
+                        // card system rather than two unrelated ones.
+                        // 2026-07-03 reduced titleMedium → titleSmall to
+                        // match the rest of the courses UI (the home
+                        // page already uses smaller fonts for density).
+                        style = MaterialTheme.typography.titleSmall,
                         color = Color.White,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
@@ -155,14 +173,17 @@ fun ContinueLearningCard(
                         shape = RoundedCornerShape(28.dp),
                         colors = IconButtonDefaults.filledIconButtonColors(
                             containerColor = Color.White,
-                            contentColor = MaterialTheme.colorScheme.primary,
+                            // §12.32c: contentColor (the icon inside
+                            // the white circle) lightened to match the
+                            // new lighter-purple hero gradient.
+                            contentColor = Color(0xFFA78BFA),
                         ),
                     ) {
                         Icon(
                             imageVector = Icons.Outlined.PlayCircle,
                             contentDescription = "Start",
                             modifier = Modifier.size(30.dp),
-                            tint = MaterialTheme.colorScheme.primary,
+                            tint = Color(0xFFA78BFA),
                         )
                     }
                 }

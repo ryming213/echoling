@@ -29,7 +29,7 @@ data class CoursesUiState(
     val continueLearning: ContinueLearningItem? = null,
     /**
      * Flips to true the first time Room emits into the combine. Used
-     * to avoid flashing the "暂无课程" empty state during the first
+     * to avoid flashing the "暂无练习" empty state during the first
      * frame, when the ViewModel's `init` coroutine hasn't yet started
      * collecting and the groups list is still the default empty list.
      */

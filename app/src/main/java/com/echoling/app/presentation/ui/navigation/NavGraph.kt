@@ -3,6 +3,8 @@ package com.echoling.app.presentation.ui.navigation
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
@@ -10,102 +12,94 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
-import com.echoling.app.presentation.ui.screens.api.ApiScreen
 import com.echoling.app.presentation.ui.screens.course.CourseDetailScreen
-import com.echoling.app.presentation.ui.screens.courses.CoursesScreen
 import com.echoling.app.presentation.ui.screens.import.ImportScreen
 import com.echoling.app.presentation.ui.screens.instructions.InstructionsScreen
-import com.echoling.app.presentation.ui.screens.me.MeScreen
+import com.echoling.app.presentation.ui.screens.permissions.PermissionsScreen
 import com.echoling.app.presentation.ui.screens.practice.PracticeScreen
 import com.echoling.app.presentation.ui.screens.recite.CategoryStudyScreen
-import com.echoling.app.presentation.ui.screens.recite.ReciteScreen
 import com.echoling.app.presentation.ui.screens.statistics.StatisticsScreen
-import com.echoling.app.presentation.ui.screens.vocabulary.VocabularyScreen
+
+/**
+ * Internal start-destination route for the sub-page NavHost. The
+ * composable for this route is a transparent [Box] — when the user is
+ * on a tab (no sub-page pushed), the NavHost is parked here and the
+ * [TabPagerHost] behind it is fully visible.
+ *
+ * When a sub-page is pushed, the NavHost transitions:
+ *   - **Forward (push)**: `tab_root` slides out to the left
+ *     (`slideExitLeft`), the new sub-page slides in from the right
+ *     (`slideEnterRight`). The Pager underneath is gradually covered.
+ *   - **Backward (pop)**: sub-page slides out to the right
+ *     (`slideExitRight`), `tab_root` slides in from the left
+ *     (`slideEnterLeft`). The Pager underneath is gradually revealed.
+ *
+ * The Pager itself does not move during a sub-page push/pop, only the
+ * NavHost layer above it. This is the standard iOS-style overlay
+ * pattern.
+ */
+private const val TAB_ROOT_ROUTE = "tab_root"
+
+/** The dummy route used as the sub-page NavHost start destination. */
+val TAB_ROOT: String = TAB_ROOT_ROUTE
+
+// (2026-07-04) Made public instead of private so PracticeScreen can
+// reference the same value to defer its heavy first-frame work past the
+// slide-in animation window (see PracticeScreen.kt:LaunchedEffect).
+// Without this shared constant, the screen-level delay would have to
+// hard-code 350 and silently drift if the slide ever changes.
+const val SUB_PAGE_NAV_ANIM_MS: Int = 350
 
 private val slideEnterRight = slideInHorizontally(
     initialOffsetX = { fullWidth -> fullWidth },
-    animationSpec = tween(350)
+    animationSpec = tween(SUB_PAGE_NAV_ANIM_MS)
 )
 private val slideExitLeft = slideOutHorizontally(
     targetOffsetX = { fullWidth -> -fullWidth },
-    animationSpec = tween(350)
+    animationSpec = tween(SUB_PAGE_NAV_ANIM_MS)
 )
 private val slideEnterLeft = slideInHorizontally(
     initialOffsetX = { fullWidth -> -fullWidth },
-    animationSpec = tween(350)
+    animationSpec = tween(SUB_PAGE_NAV_ANIM_MS)
 )
 private val slideExitRight = slideOutHorizontally(
     targetOffsetX = { fullWidth -> fullWidth },
-    animationSpec = tween(350)
+    animationSpec = tween(SUB_PAGE_NAV_ANIM_MS)
 )
 
+/**
+ * NavHost for sub-pages only. The 4 main tabs are hosted in a
+ * separate [TabPagerHost] (HorizontalPager) in [MainScaffold].
+ *
+ * The 4 tab routes (Courses / Vocabulary / Recite / Me) used to live
+ * here too (in the original NavGraph), but were extracted to the
+ * Pager in 2026-06-28 so the tab switch could be direction-aware
+ * (forward tabs slide in from the right; backward tabs slide in from
+ * the left) and gesture-driven (swipe left/right to change tab).
+ *
+ * The sub-page transitions remain the standard slide-left / slide-right
+ * pattern. Sub-pages are full-screen, so the bottom bar is hidden
+ * while one is on top.
+ */
 @Composable
-fun EchoLingNavGraph(
+fun SubPageNavGraph(
     navController: NavHostController,
-    startDestination: String = Screen.Courses.route,
     modifier: Modifier = Modifier,
 ) {
     NavHost(
         navController = navController,
-        startDestination = startDestination,
+        startDestination = TAB_ROOT_ROUTE,
         enterTransition = { slideEnterRight },
         exitTransition = { slideExitLeft },
         popEnterTransition = { slideEnterLeft },
         popExitTransition = { slideExitRight },
         modifier = modifier,
     ) {
-        // ── Tab roots ────────────────────────────────────────────────────
-        composable(Screen.Courses.route) {
-            CoursesScreen(
-                // §12.21: home page's top-right IconButton is now a
-                // Help / "使用说明" button (see CoursesScreen.kt).
-                // Statistics is still reachable via the tappable
-                // StatsSummaryCard in the body.
-                onNavigateToInstructions = {
-                    navController.navigate(Screen.Instructions.route)
-                },
-                onNavigateToStatistics = {
-                    navController.navigate(Screen.Statistics.route)
-                },
-                onNavigateToPractice = { courseId ->
-                    navController.navigate(Screen.Practice.createRoute(courseId))
-                },
-                onNavigateToCategory = { courseName ->
-                    // §12.19: the home page now lists *groups* of
-                    // courses. Tapping a group navigates to the
-                    // category-detail screen with the group name.
-                    navController.navigate(Screen.CourseDetail.createRoute(courseName))
-                },
-                onNavigateToImport = {
-                    navController.navigate(Screen.Import.route)
-                },
-            )
+        // Transparent placeholder. The Pager is visible underneath.
+        composable(TAB_ROOT_ROUTE) {
+            Box(modifier = Modifier.fillMaxSize())
         }
 
-        composable(Screen.Vocabulary.route) {
-            VocabularyScreen(onNavigateBack = null)
-        }
-
-        // The "记单词" (Recite) tab root — a category picker showing
-        // 初中 / 高中 / CET-4 / CET-6 / 托福 as cards. Tapping a card
-        // navigates to [Screen.CategoryStudy] for that category.
-        composable(Screen.Recite.route) {
-            ReciteScreen(
-                onNavigateToCategory = { categoryId ->
-                    navController.navigate(Screen.CategoryStudy.createRoute(categoryId))
-                },
-            )
-        }
-
-        composable(Screen.Me.route) {
-            MeScreen(
-                onNavigateToApiConfig = {
-                    navController.navigate(Screen.ApiConfig.route)
-                },
-            )
-        }
-
-        // ── Sub-pages (no bottom bar) ───────────────────────────────────
         composable(
             route = Screen.Import.route,
             arguments = listOf(
@@ -178,10 +172,10 @@ fun EchoLingNavGraph(
             )
         }
 
-        // §12.22: API config sub-page (moved off the bottom bar but
-        // still reachable from Me so existing credentials stay editable).
-        composable(Screen.ApiConfig.route) {
-            ApiScreen(
+        // (2026-07-04) in-app "权限使用说明" page. Required by 国内应用商店
+        // review. Reached from MeScreen's "权限使用说明" entry.
+        composable(Screen.Permissions.route) {
+            PermissionsScreen(
                 onNavigateBack = { navController.popBackStack() },
             )
         }

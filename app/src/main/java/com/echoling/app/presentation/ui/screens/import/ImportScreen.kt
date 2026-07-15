@@ -27,7 +27,23 @@ import com.echoling.app.presentation.ui.components.PageHeader
 import com.echoling.app.presentation.viewmodel.ImportState
 import com.echoling.app.presentation.viewmodel.ImportViewModel
 
-private val difficultyOptions = listOf("Beginner", "Intermediate", "Advanced")
+// (2026-06-28) Difficulty values kept in English internally so:
+//   1. Existing Room rows persist with the original English strings
+//      (Beginner/Intermediate/Advanced) and display identically in
+//      [CourseListItem]'s difficulty chip (line ~147: `Text(course.difficulty)`)
+//   2. [CourseListItem]'s accent-bar tier detection
+//      (`accentColorFor(difficulty).startsWith("A"/"B"/"C")`) keeps
+//      matching existing rows
+//   3. iOS-side Course.difficulty stays a freeform String — no
+//      schema-level coupling either way
+// The dropdown UI now shows the Chinese `displayName` and writes
+// the English `value` to the DB.
+private data class DifficultyOption(val value: String, val displayName: String)
+private val difficultyOptions = listOf(
+    DifficultyOption("Beginner", "初级"),
+    DifficultyOption("Intermediate", "中级"),
+    DifficultyOption("Advanced", "高级"),
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -36,7 +52,7 @@ fun ImportScreen(
     onImportComplete: () -> Unit,
     /**
      * When the user opens import from a category-detail sub-page
-     * (§12.19) this is the parent group name — the form's "课程名字"
+     * (§12.19) this is the parent group name — the form's "素材名字"
      * field is seeded with it so the user only has to type the per-
      * lesson title. Null when launched from the home page.
      */
@@ -50,7 +66,7 @@ fun ImportScreen(
         mutableStateOf(prefillCourseName.orEmpty())
     }
     var courseTitle by remember { mutableStateOf("") }
-    var selectedDifficulty by remember { mutableStateOf("Intermediate") }
+    var selectedDifficulty by remember { mutableStateOf("Intermediate") }  // English value, displayed via displayName lookup
     var dropdownExpanded by remember { mutableStateOf(false) }
     var isAudioPickerLoading by remember { mutableStateOf(false) }
     var isVideoPickerLoading by remember { mutableStateOf(false) }
@@ -101,7 +117,7 @@ fun ImportScreen(
                 titleAlignment = Alignment.Start,
                 title = {
                     Text(
-                        text = "Import Course",
+                        text = "导入素材",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -118,24 +134,35 @@ fun ImportScreen(
             ) {
                 // Header
                 Column {
-                    // §12.21: shrunk the headline from
-                    // `headlineSmall` (24sp) to `titleLarge` (22sp) —
-                    // visually similar weight but a bit smaller,
-                    // matching the rest of the form's font scale
-                    // and avoiding the "page inside a page" feel.
+                    // (2026-07-04) Shrunk further: §12.21 took it
+                    // from headlineSmall 24sp → titleLarge 22sp. The
+                    // user said it still felt like "page inside a
+                    // page" compared with the rest of the form, so
+                    // dropped another notch to titleMedium 16sp —
+                    // reads as a section label rather than a page
+                    // heading. Description below stays bodyMedium
+                    // (14sp), keeping clear hierarchy headline →
+                    // helper text.
                     Text(
-                        text = "Import Your Course",
-                        style = MaterialTheme.typography.titleLarge
+                        text = "导入你的素材",
+                        style = MaterialTheme.typography.titleMedium
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Add audio/video and subtitle files to create a learning course",
+                        text = "添加音频、视频和字幕文件，创建学习素材",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                // (2026-07-04) Removed the 8dp Spacer that used to live
+                // here. Combined with Arrangement.spacedBy(20.dp) the
+                // header→form gap was 28dp, which the user said read
+                // as "detached" — the description and the first OTF
+                // felt like separate groups. The Arrangement's 20dp is
+                // already plenty for visual separation; dropping the
+                // extra Spacer pulls the form up and lets the
+                // description and 素材分组名 row read as one block.
 
                 // Course group name (parent folder, §12.19). Required:
                 // blank values fall back to the lesson title at the
@@ -145,8 +172,8 @@ fun ImportScreen(
                 OutlinedTextField(
                     value = courseName,
                     onValueChange = { courseName = it },
-                    label = { Text("Course Name (课程名字)") },
-                    placeholder = { Text("e.g. 新概念英语第一册") },
+                    label = { Text("素材分组名（父目录）") },
+                    placeholder = { Text("例如：摩登家庭第一季") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     enabled = importState != ImportState.IMPORTING,
@@ -157,8 +184,8 @@ fun ImportScreen(
                 OutlinedTextField(
                     value = courseTitle,
                     onValueChange = { courseTitle = it },
-                    label = { Text("Course Title (课程标题)") },
-                    placeholder = { Text("e.g. Lesson 1") },
+                    label = { Text("素材标题") },
+                    placeholder = { Text("例如：第 1 课") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     enabled = importState != ImportState.IMPORTING,
@@ -167,8 +194,8 @@ fun ImportScreen(
 
                 // Audio file selector
                 FileSelectorCard(
-                    title = "Audio File (Optional)",
-                    subtitle = audioUri?.lastPathSegment ?: "Select audio file",
+                    title = "音频文件（可选）",
+                    subtitle = audioUri?.lastPathSegment ?: "选择音频文件",
                     icon = Icons.Outlined.AudioFile,
                     isSelected = audioUri != null,
                     isLoading = isAudioPickerLoading,
@@ -183,8 +210,8 @@ fun ImportScreen(
 
                 // Video file selector
                 FileSelectorCard(
-                    title = "Video File (Optional)",
-                    subtitle = videoUri?.lastPathSegment ?: "Select video file",
+                    title = "视频文件（可选）",
+                    subtitle = videoUri?.lastPathSegment ?: "选择视频文件",
                     icon = Icons.Outlined.VideoFile,
                     isSelected = videoUri != null,
                     isLoading = isVideoPickerLoading,
@@ -199,8 +226,8 @@ fun ImportScreen(
 
                 // Subtitle file selector
                 FileSelectorCard(
-                    title = "Subtitle File (Optional)",
-                    subtitle = subtitleUri?.lastPathSegment ?: "Select subtitle file",
+                    title = "字幕文件（可选）",
+                    subtitle = subtitleUri?.lastPathSegment ?: "选择字幕文件",
                     icon = Icons.Outlined.Description,
                     isSelected = subtitleUri != null,
                     isLoading = isSubtitlePickerLoading,
@@ -231,10 +258,15 @@ fun ImportScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         OutlinedTextField(
-                            value = selectedDifficulty,
+                            // Display Chinese label, store English value.
+                            // Lookup via `firstOrNull { it.value == selectedDifficulty }`
+                            // — the option list is tiny (3 entries) so linear scan is fine.
+                            value = difficultyOptions
+                                .firstOrNull { it.value == selectedDifficulty }
+                                ?.displayName ?: selectedDifficulty,
                             onValueChange = {},
                             readOnly = true,
-                            label = { Text("Difficulty") },
+                            label = { Text("难度") },
                             trailingIcon = {
                                 ExposedDropdownMenuDefaults.TrailingIcon(expanded = dropdownExpanded)
                             },
@@ -250,12 +282,12 @@ fun ImportScreen(
                         ) {
                             difficultyOptions.forEach { option ->
                                 DropdownMenuItem(
-                                    text = { Text(option) },
+                                    text = { Text(option.displayName) },
                                     onClick = {
-                                        selectedDifficulty = option
+                                        selectedDifficulty = option.value
                                         dropdownExpanded = false
                                     },
-                                    leadingIcon = if (option == selectedDifficulty) {
+                                    leadingIcon = if (option.value == selectedDifficulty) {
                                         {
                                             Icon(
                                                 Icons.Default.AudioFile,
@@ -284,7 +316,7 @@ fun ImportScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = errorMessage ?: "Import failed",
+                                text = errorMessage ?: "导入失败",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onErrorContainer,
                                 modifier = Modifier.weight(1f)
@@ -334,8 +366,8 @@ fun ImportScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = when (importState) {
-                            ImportState.IMPORTING -> "Importing..."
-                            else -> "Import Course"
+                            ImportState.IMPORTING -> "导入中..."
+                            else -> "导入素材"
                         },
                         style = MaterialTheme.typography.titleMedium
                     )
@@ -402,7 +434,7 @@ private fun FileSelectorCard(
                         MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    text = if (isLoading) "Opening file picker..." else subtitle,
+                    text = if (isLoading) "正在打开文件选择器..." else subtitle,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
@@ -411,7 +443,7 @@ private fun FileSelectorCard(
             if (isSelected) {
                 Icon(
                     imageVector = Icons.Default.AudioFile,
-                    contentDescription = "Selected",
+                    contentDescription = "已选择",
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(20.dp)
                 )

@@ -5,11 +5,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -70,6 +72,15 @@ fun CoursesScreen(
     val uiState by viewModel.uiState.collectAsState()
 
     Scaffold(
+        // §12.30: only consume the top status-bar inset, not the bottom
+        // navigation-bar inset. The outer MainScaffold already accounts
+        // for the bottom tab bar (it lives in MainScaffold's bottomBar
+        // slot and gets folded into innerPadding), so if THIS inner
+        // Scaffold ALSO subtracts the nav bar inset, the LazyColumn
+        // body ends 24dp shorter than the Pager that hosts it — leaving
+        // a 24dp page-colored strip between the tab bar and the last
+        // list item. See CLAUDE.md §12.30 for the full chain.
+        contentWindowInsets = WindowInsets.statusBars,
         // No topBar — content starts right below the status bar via
         // Scaffold's `padding` parameter (which still includes the status
         // bar inset). The PageHeader at the top of the body holds the
@@ -78,7 +89,7 @@ fun CoursesScreen(
             ExtendedFloatingActionButton(
                 onClick = onNavigateToImport,
                 icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                text = { Text("导入课程") },
+                text = { Text("导入素材") },
                 containerColor = MaterialTheme.colorScheme.primaryContainer,
                 contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
             )
@@ -130,7 +141,7 @@ fun CoursesScreen(
                 when {
                     // Only show the empty state once we KNOW there's no
                     // data. Before the first Room emission, `groups` is
-                    // the default empty list — flashing "暂无课程" for
+                    // the default empty list — flashing "暂无练习" for
                     // that brief window looks like the title + empty
                     // state appear first and the real list arrives a
                     // moment later, which is exactly what we want to
@@ -209,7 +220,7 @@ private fun CoursesList(
         item("section-header") {
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "我的课程",
+                text = "我的练习",
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -247,12 +258,12 @@ private fun EmptyCourses(onNavigateToImport: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(24.dp))
             Text(
-                text = "暂无课程",
+                text = "暂无练习",
                 style = MaterialTheme.typography.headlineSmall,
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "导入课程开始学习",
+                text = "导入素材开始学习",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -263,7 +274,7 @@ private fun EmptyCourses(onNavigateToImport: () -> Unit) {
             ) {
                 Icon(Icons.Default.Add, contentDescription = null)
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("导入课程")
+                Text("导入素材")
             }
         }
     }

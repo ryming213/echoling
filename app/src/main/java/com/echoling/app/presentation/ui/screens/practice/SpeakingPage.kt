@@ -10,8 +10,10 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -23,6 +25,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.echoling.app.player.subtitle.Subtitle
+import com.echoling.app.presentation.ui.screens.practice.components.RedRecordCircle
 import com.echoling.app.presentation.viewmodel.PracticeViewModel
 import com.echoling.app.presentation.viewmodel.SentenceState
 import com.echoling.app.speech.RecordingState
@@ -38,7 +41,11 @@ fun SpeakingPage(
     val recordingState by viewModel.recordingState.collectAsState()
     val isPlayingRecording by viewModel.isPlayingRecording.collectAsState()
     val sentenceStates by viewModel.sentenceStates.collectAsState()
-    val recordingPath by viewModel.recordingPath.collectAsState()
+    // (2026-06-28) Per-page recording path. Collects only the
+    // speaking-page path; test-page recordings are invisible to
+    // this page so the "我的录音" playback card won't show a
+    // test-page recording here.
+    val recordingPath by viewModel.speakingRecordingPath.collectAsState()
     val isVideoMode by viewModel.isVideoMode.collectAsState()
     val videoPlayerState by viewModel.videoPlayerState.collectAsState()
 
@@ -77,7 +84,15 @@ fun SpeakingPage(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
+                // (2026-07-04) Bottom padding dropped from 8dp → 0dp
+                // so the [SpeakingSubtitleCard] below sits flush
+                // against the OutlinedButton. Top padding kept at
+                // 8dp to keep the dropdown away from the video
+                // player frame above. Combined with the card's
+                // own internal 16dp padding, the first row
+                // ("句子 N" + completion check) now sits 16dp
+                // below the button's bottom edge (was 24dp).
+                .padding(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 0.dp)
         ) {
             OutlinedButton(
                 onClick = { showSentenceMenu = true },
@@ -95,10 +110,32 @@ fun SpeakingPage(
             DropdownMenu(
                 expanded = showSentenceMenu,
                 onDismissRequest = { showSentenceMenu = false },
-                modifier = Modifier.widthIn(max = 300.dp)
+                // (2026-07-04) Removed the `widthIn(max = 300.dp)`
+                // cap that fit the previous 5-column grid. With
+                // 8 × 36dp cells + 7 × 4dp gaps = 316dp the row
+                // already fits inside the full-width anchor (≈
+                // screen-width minus 32dp Box padding) on any
+                // modern phone. Forcing 300dp here would clip the
+                // rightmost column on phones narrower than 350dp.
             ) {
-                // Display sentences in a grid of 5 columns
-                val columns = 5
+                // (2026-07-04) Layout reshaped per user request:
+                //   - columns 5 → 8 (more sentence numbers per row)
+                //   - cell size 48dp → 36dp (so 8 cells × 36dp +
+                //     7 × 4dp gaps = 316dp fits within the menu)
+                //   - completed style: previously "faded lavender
+                //     secondaryContainer + green text + corner check
+                //     badge"; now "solid green + white text, no
+                //     badge". The solid green + white is the
+                //     strongest readability signal on its own — the
+                //     check badge cluttered the smaller 36dp cells
+                //     and made completed numbers look noisier than
+                //     the rest. Selected (current subtitle) styling
+                //     unchanged: primaryContainer + onPrimaryContainer
+                //     — keeping primary purple for selection so
+                //     "completed" (green) and "selected"
+                //     (purple) read as two independent states.
+                val columns = 8
+                val cellSize = 36.dp
                 val rows = (subtitles.size + columns - 1) / columns
                 for (row in 0 until rows) {
                     Row(
@@ -114,7 +151,7 @@ fun SpeakingPage(
 
                                 Surface(
                                     modifier = Modifier
-                                        .size(48.dp)
+                                        .size(cellSize)
                                         .clickable {
                                             viewModel.skipToSubtitle(index)
                                             revealedWords = emptySet()
@@ -123,7 +160,7 @@ fun SpeakingPage(
                                     shape = RoundedCornerShape(8.dp),
                                     color = when {
                                         isSelected -> MaterialTheme.colorScheme.primaryContainer
-                                        isCompleted -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)
+                                        isCompleted -> Color(0xFF4CAF50)
                                         else -> Color.Transparent
                                     }
                                 ) {
@@ -133,21 +170,10 @@ fun SpeakingPage(
                                             style = MaterialTheme.typography.bodyMedium,
                                             color = when {
                                                 isSelected -> MaterialTheme.colorScheme.onPrimaryContainer
-                                                isCompleted -> Color(0xFF4CAF50) // Green for completed
+                                                isCompleted -> Color.White
                                                 else -> MaterialTheme.colorScheme.onSurface
                                             }
                                         )
-                                        if (isCompleted) {
-                                            Icon(
-                                                Icons.Default.CheckCircle,
-                                                "已完成",
-                                                modifier = Modifier
-                                                    .size(12.dp)
-                                                    .align(Alignment.TopEnd)
-                                                    .padding(2.dp),
-                                                tint = Color(0xFF4CAF50)
-                                            )
-                                        }
                                     }
                                 }
                             }
@@ -157,46 +183,94 @@ fun SpeakingPage(
             }
         }
 
-        // Current sentence card
-        if (currentSub != null) {
-            SpeakingSubtitleCard(
-                subtitle = currentSub,
-                displayIndex = currentSubtitleIndex,
-                isCompleted = currentSentenceState?.isCompleted == true,
-                revealedWords = revealedWords,
-                onWordReveal = { wordIdx ->
-                    revealedWords = if (revealedWords.contains(wordIdx)) {
-                        revealedWords - wordIdx
-                    } else {
-                        revealedWords + wordIdx
-                    }
-                },
-                onWordLongClick = { word ->
-                    selectedWord = word
-                    showWordDialog = true
-                    viewModel.requestWordTranslation(word)
-                },
-                onMarkCompleted = { completed ->
-                    viewModel.markSentenceCompleted(currentSub.index, completed)
-                },
+        // ─── Middle area (subtitle card + RedRecordCircle anchor + playback) ───
+        // (2026-07-10) §12.39: Wrap middle area in a single weight(1f)
+        // Column so the bottom SpeakingControlBar always sticks to the
+        // bottom of the screen — even when subtitles haven't loaded yet
+        // (i.e. `currentSub == null`, the SpeakingSubtitleCard call below
+        // is skipped). Previously the layout collapsed mid-screen when
+        // subtitles were empty because nothing in the middle claimed
+        // weight; the control bar floated up. Now the middle Column
+        // always claims weight(1f), pinning the control bar at the
+        // bottom regardless of subtitle availability.
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+        ) {
+            // Current sentence card — skipped when subtitles haven't
+            // loaded (first launch before any course; or course with no
+            // subtitles). The surrounding Column still keeps its slot.
+            if (currentSub != null) {
+                SpeakingSubtitleCard(
+                    subtitle = currentSub,
+                    displayIndex = currentSubtitleIndex,
+                    isCompleted = currentSentenceState?.isCompleted == true,
+                    revealedWords = revealedWords,
+                    onWordReveal = { wordIdx ->
+                        revealedWords = if (revealedWords.contains(wordIdx)) {
+                            revealedWords - wordIdx
+                        } else {
+                            revealedWords + wordIdx
+                        }
+                    },
+                    onWordLongClick = { word ->
+                        selectedWord = word
+                        showWordDialog = true
+                        viewModel.requestWordTranslation(word)
+                    },
+                    onMarkCompleted = { completed ->
+                        viewModel.markSentenceCompleted(currentSub.index, completed)
+                    },
+                    // (2026-07-10) §12.39: weight(1f) lets the card
+                    // share the vertical space inside the middle Column
+                    // with the RedRecordCircle anchor below, instead
+                    // of pushing the ControlBar off-screen for long
+                    // sentences. The inner Column has
+                    // verticalScroll(rememberScrollState()) so words
+                    // scroll inside the card when content overflows.
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(horizontal = 16.dp)
+                )
+            }
+
+            // RedRecordCircle anchor — (2026-07-10) §12.42 changed
+            // from heightIn(min = 48.dp) + Alignment.Center to
+            // heightIn(min = 48.dp, max = 140.dp) + Alignment.BottomCenter,
+            // and the previously-following RecordingPlaybackCard was
+            // removed (see below). Combined effect: when recording,
+            // the 140dp circle is gravity-aligned to the BOTTOM of
+            // this slot, sitting visually adjacent to the
+            // SpeakingControlBar below; when not recording the slot
+            // falls back to 48dp minimum (no empty 140dp hole). The
+            // Removed-by-§12.42 RecordingPlaybackCard used to eat
+            // ~80dp of vertical space + a duplicate play button; its
+            // deletion makes the Speaking 5-button bar's 4th "Play
+            // recording" the SOLE playback affordance.
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-            )
-        }
+                    .heightIn(min = 48.dp, max = 140.dp),
+                contentAlignment = Alignment.BottomCenter
+            ) {
+                if (recordingState == RecordingState.RECORDING) {
+                    RedRecordCircle()
+                }
+            }
 
-        Spacer(Modifier.weight(1f))
-
-        // Recording playback card (if recording exists)
-        recordingPath?.let {
-            RecordingPlaybackCard(
-                isPlaying = isPlayingRecording,
-                onPlayRecording = { viewModel.playRecording() },
-                onStopPlaying = { viewModel.stopPlayingRecording() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-            )
+            // (2026-07-10) §12.42: RecordingPlaybackCard was REMOVED.
+            // The user's "我的录音点击播放的窗口" referred to this
+            // card's wide surface + play/stop button row that
+            // appeared between the subtitle card and the bottom
+            // control bar after a recording was completed. Function
+            // duplicated by the 4th button on SpeakingControlBar
+            // ("播放录音" → "停止"); keeping both added ~80dp of
+            // vertical space + a second tap target for the same
+            // action. The 4th bar button is kept enabled as long as
+            // speakingRecordingPath != null, so the user can still
+            // replay the recording after recording stops.
         }
 
         // Bottom controls: Prev, Play, Record, Playback, Next
@@ -271,10 +345,20 @@ private fun SpeakingSubtitleCard(
                 MaterialTheme.colorScheme.surface
         )
     ) {
+        // (2026-07-10) §12.41: Outer Column is **non-scrollable** so the
+        // header row (句子 N · 未完成 · 标记完成) stays pinned at the
+        // top of the card. The previous design wrapped EVERYTHING
+        // including the header in a single verticalScroll(…) — that
+        // meant a long sentence scrolled the header off the visible
+        // area, so mid-recording the user couldn't tell which
+        // sentence they were on or whether it was already marked
+        // completed. New design: header outside scroll, only the
+        // words + translation inside scroll.
         Column(
             modifier = Modifier.padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // ─── Header row (always visible, pinned) ───────────────
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -317,24 +401,44 @@ private fun SpeakingSubtitleCard(
 
             Spacer(Modifier.height(12.dp))
 
-            // Words row - wrap words into multiple lines
-            SpeakingWordsFlowRow(
-                words = words,
-                maxWordLength = maxWordLength,
-                revealedWords = revealedWords,
-                onWordClick = onWordReveal,
-                onWordLongClick = onWordLongClick,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            // Chinese translation
-            if (subtitle.contentCn.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = subtitle.contentCn,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+            // ─── Scrollable area: words + translation ──────────────
+            // (2026-07-10) §12.41: verticalScroll only on this inner
+            // column, NOT the outer one. The outer Card's content
+            // height is now bounded (header takes ~36dp), so the
+            // inner scrollable column fills the remaining vertical
+            // space inside the weight(1f)-sized card without ever
+            // pushing the bottom control bar off-screen.
+            //
+            // weight(1f) on the inner Column is REQUIRED —
+            // `verticalScroll` only kicks in when the container has
+            // bounded height; without weight(1f) it would inherit
+            // wrap-content and grow with content (no scroll trigger).
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Words row - wrap words into multiple lines
+                SpeakingWordsFlowRow(
+                    words = words,
+                    maxWordLength = maxWordLength,
+                    revealedWords = revealedWords,
+                    onWordClick = onWordReveal,
+                    onWordLongClick = onWordLongClick,
+                    modifier = Modifier.fillMaxWidth()
                 )
+
+                // Chinese translation
+                if (subtitle.contentCn.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = subtitle.contentCn,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
@@ -531,10 +635,21 @@ private fun SpeakingControlBar(
             }
 
             // Play recording
+            // (2026-06-28) Reads the latest speakingRecordingPath
+            // from the StateFlow at click time and passes it
+            // explicitly to playRecording. The button is only
+            // enabled when speakingRecordingPath != null, but
+            // capturing the value at click time is more robust
+            // than relying on a closure-captured `recordingPath`
+            // variable (which could in theory be stale if the
+            // StateFlow re-emitted between render and click).
             IconButton(
                 onClick = {
-                    if (isPlayingRecording) viewModel.stopPlayingRecording()
-                    else viewModel.playRecording()
+                    if (isPlayingRecording) {
+                        viewModel.stopPlayingRecording()
+                    } else {
+                        viewModel.playRecording(viewModel.speakingRecordingPath.value)
+                    }
                 }
             ) {
                 Surface(
@@ -561,50 +676,6 @@ private fun SpeakingControlBar(
                         tint = MaterialTheme.colorScheme.onSecondaryContainer
                     )
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun RecordingPlaybackCard(
-    isPlaying: Boolean,
-    onPlayRecording: () -> Unit,
-    onStopPlaying: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier,
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
-        )
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text(
-                    "我的录音",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-                Text(
-                    if (isPlaying) "播放中..." else "点击播放",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
-                )
-            }
-            IconButton(onClick = if (isPlaying) onStopPlaying else onPlayRecording) {
-                Icon(
-                    if (isPlaying) Icons.Default.Stop else Icons.Default.PlayArrow,
-                    contentDescription = if (isPlaying) "停止" else "播放",
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer
-                )
             }
         }
     }

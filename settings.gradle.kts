@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "echo-ling"
 include(":app")
+include(":jna-bridge")

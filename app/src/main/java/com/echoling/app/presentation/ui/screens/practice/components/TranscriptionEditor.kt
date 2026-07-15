@@ -12,24 +12,21 @@ import androidx.compose.ui.unit.dp
 /**
  * Post-recording panel shown after the user releases the mic.
  *
- * Per user spec, the panel is intentionally minimal: the recognized
- * text is hidden by default and only revealed when the user clicks
- * the "显示文字" button at the bottom-right. The recognized text,
- * once shown, is itself clickable to submit for matching. The
- * "手动修改" button at the center-bottom switches the content area
- * to an editable OutlinedTextField for manual entry.
+ * Recognized text is displayed immediately on entry — no "reveal"
+ * step. The displayed text is **clickable to enter edit mode** for
+ * manual correction; submitting happens via the bottom-right
+ * 提交 button.
  *
- * Three buttons at the bottom in a fixed layout (always the same
- * labels, matching the user's spec for left/center/right positions):
- * - **重录** (bottom-left): re-record (calls [onRerecord])
- * - **手动修改** (center-bottom): enter edit mode to manually type
- * - **显示文字** (bottom-right): show the recognized text
+ * (2026-06-28) UI flow was simplified per user feedback:
+ *   - **Old**: click text → submit immediately; click 手动修改 →
+ *     enter edit mode; then click 提交 to submit.
+ *   - **New**: click text → enter edit mode (OutlinedTextField);
+ *     type / leave as-is; click 提交 to submit. The 手动修改
+ *     button was redundant with the text-click affordance and
+ *     has been removed.
  *
- * Display states inside the card:
- * - **Idle**: placeholder text, no recognized text shown
- * - **Showing**: recognized text rendered inside a clickable
- *   Surface — clicking the text submits it
- * - **Editing**: OutlinedTextField + 确认提交 button below
+ * The 提交 button stays because edit mode needs a way to commit
+ * the final text. Re-record via 重录 on the left.
  *
  * @param initialText the STT-recognized text (may be blank)
  * @param onTextChange kept for API compatibility — not used internally
@@ -44,7 +41,6 @@ fun TranscriptionEditor(
     onRerecord: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var showText by remember { mutableStateOf(false) }
     var isEditing by remember { mutableStateOf(false) }
     var editedText by remember { mutableStateOf(initialText) }
 
@@ -62,88 +58,71 @@ fun TranscriptionEditor(
             )
             Spacer(Modifier.height(12.dp))
 
-            when {
-                isEditing -> {
-                    // Editing mode: editable text field + 确认提交 below
-                    OutlinedTextField(
-                        value = editedText,
-                        onValueChange = { editedText = it },
-                        placeholder = { Text("输入你复述的句子") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 96.dp),
-                        minLines = 3
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Button(
-                        onClick = { onSubmit(editedText) },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = editedText.isNotBlank()
-                    ) {
-                        Text("确认提交")
-                    }
-                }
-                showText -> {
-                    // Showing mode: recognized text inside a clickable Surface.
-                    // Clicking the text submits the original STT result.
-                    val display = initialText.ifBlank { "（未识别到语音）" }
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onSubmit(initialText) }
-                    ) {
-                        Text(
-                            display,
-                            style = MaterialTheme.typography.bodyLarge,
-                            modifier = Modifier.padding(12.dp)
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
+            if (isEditing) {
+                // Editing mode: editable text field. User types /
+                // pastes / leaves as-is, then taps 提交 below.
+                OutlinedTextField(
+                    value = editedText,
+                    onValueChange = { editedText = it },
+                    placeholder = { Text("输入你复述的句子") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 96.dp),
+                    minLines = 3
+                )
+            } else {
+                // Showing mode (default): recognized text inside a
+                // clickable Surface. Clicking the text now enters
+                // edit mode (not submits directly). The hint text
+                // was reworded accordingly.
+                val display = initialText.ifBlank { "（未识别到语音）" }
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            // Seed editedText with the current
+                            // recognized text so the OutlinedTextField
+                            // opens with the STT result pre-filled.
+                            editedText = initialText
+                            isEditing = true
+                        }
+                ) {
                     Text(
-                        "点击文字提交，或点击「手动修改」",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        display,
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.padding(12.dp)
                     )
                 }
-                else -> {
-                    // Idle mode: no text shown yet, just a hint
-                    Text(
-                        "点击右下角「显示文字」查看识别结果",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "点击文字修改",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             Spacer(Modifier.height(12.dp))
 
-            // Fixed 3-button row: 重录 (left) / 手动修改 (center) / 显示文字 (right)
+            // Bottom row: 重录 on the left, 提交 on the right. The
+            // 手动修改 button was removed (text click now enters
+            // edit mode directly). 提交 is the only way to commit.
             Row(
-                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
             ) {
                 OutlinedButton(onClick = onRerecord) {
                     Text("重录")
                 }
-                OutlinedButton(
-                    onClick = {
-                        if (!isEditing) {
-                            editedText = initialText
-                            isEditing = true
-                        }
-                    },
-                    enabled = !isEditing
-                ) {
-                    Text("手动修改")
-                }
+                Spacer(modifier = Modifier.weight(1f))
                 Button(
-                    onClick = { showText = true },
-                    enabled = !showText
+                    onClick = {
+                        onSubmit(if (isEditing) editedText else initialText)
+                    },
+                    enabled = (if (isEditing) editedText else initialText).isNotBlank(),
                 ) {
-                    Text("显示文字")
+                    Text("提交")
                 }
             }
         }

@@ -1,25 +1,23 @@
 package com.echoling.app.presentation.ui.screens.practice
 
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
@@ -39,6 +37,26 @@ fun TestingPage(
     val sentenceStates by viewModel.sentenceStates.collectAsState()
     val sttTestState by viewModel.sttTestState.collectAsState()
     val sttAmplitudeBars by viewModel.sttAmplitudeBars.collectAsState()
+    // (2026-06-28) Per-page recording path. Collects only the
+    // test-page path; speaking-page recordings are invisible to
+    // this page so the 回放录音 button stays disabled when the
+    // user has only a speaking-page recording.
+    val recordingPath by viewModel.testRecordingPath.collectAsState()
+    val isPlayingRecording by viewModel.isPlayingRecording.collectAsState()
+    val modelDownloadState by viewModel.modelDownloadState.collectAsState()
+
+    // RECORD_AUDIO permission for the WavRecorder. The previous version
+    // of TestingPage skipped this and called viewModel.startStt() directly
+    // — which on a freshly-installed app (no prior SpeakingPage visit)
+    // would silently fail at the WavRecorder / MediaRecorder level. Mirrors
+    // SpeakingPage.kt:48-60.
+    var hasRecordPermission by remember { mutableStateOf(false) }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasRecordPermission = isGranted
+        if (isGranted) viewModel.startStt()
+    }
 
     val currentTest = testState.testItems.getOrNull(testState.currentTestIndex)
     val currentRealIndex = subtitles.indexOf(currentTest)
@@ -50,10 +68,21 @@ fun TestingPage(
         // Test progress header
         TestingProgressHeader(
             testedCount = testState.testedCount,
+            // (2026-06-28) Pass currentTestIndex so the X/Y text
+            // reflects the current test position (1-indexed) and
+            // visibly changes when the user taps 上一题/下一题.
+            // The X is the *current* question number, not the count
+            // of completed ones — see TestingProgressHeader body.
+            currentTestIndex = testState.currentTestIndex,
             totalCount = if (testState.isActive) testState.testItems.size else subtitles.size,
             isTestActive = testState.isActive,
             onStartTest = { viewModel.startTestMode() },
-            onResetTest = { /* Could add reset functionality */ }
+            // (2026-06-28) "重新测试" button on the top-right. Wires
+            // to viewModel.restartTest() which un-marks all test
+            // items and re-initializes the test from X=1. Per user
+            // spec: "用户也可以再进行新的一轮测试，所有需要增加一个
+            // 按钮 重新测试/刷新图标，放在测试页面的右上角".
+            onRestartTest = { viewModel.restartTest() }
         )
 
         if (!testState.isActive || testState.testItems.isEmpty()) {
@@ -70,8 +99,15 @@ fun TestingPage(
                     revealedWords = testState.revealedWords,
                     isTested = currentSentenceState?.isTested == true,
                     onWordReveal = { viewModel.revealTestWord(it) },
+                    // (2026-07-10) §16.X: weight(1f) lets the card share
+                    // the vertical space between header and the bottom
+                    // control bar instead of pushing the ControlBar off-
+                    // screen for long sentences. The inner Column has
+                    // verticalScroll(rememberScrollState()) so the words
+                    // scroll inside the card when content overflows.
                     modifier = Modifier
                         .fillMaxWidth()
+                        .weight(1f)
                         .padding(horizontal = 16.dp)
                 )
             }
@@ -82,8 +118,32 @@ fun TestingPage(
                 is SttTestState.Idle -> { /* nothing */ }
                 is SttTestState.Listening -> {
                     RecordingOverlay(
-                        elapsedMs = s.elapsedMs,
-                        amplitudeBars = sttAmplitudeBars,
+                        // (2026-07-10) §12.42: vertical 8dp → 2dp.
+                        // RecordingOverlay is the LAST child before
+                        // TestingControlBar (same Column layout), so
+                        // its bottom padding IS the gap to the bar.
+                        // 8dp left 8dp breathing room + 12dp inside
+                        // RecordingOverlay's own padding = 20dp, which
+                        // felt detached from the bar. Reducing the
+                        // outer to 2dp makes the circle visually
+                        // adjacent to the pill, matching the new
+                        // layout rule "recording animation belongs
+                        // AT the bar, not near it".
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 2.dp)
+                    )
+                }
+                is SttTestState.Transcribing -> {
+                    // Vosk is processing the recorded WAV file. We can't
+                    // show the editor yet (the text isn't ready) and we
+                    // can't let the user press the mic again (would
+                    // cancel the in-flight transcribe). Show a small
+                    // "正在识别" card with a progress indicator. Also
+                    // surfaces a first-run "下载模型中" banner if the
+                    // model is being downloaded right now.
+                    TranscribingCard(
+                        downloadState = modelDownloadState,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp)
@@ -104,12 +164,35 @@ fun TestingPage(
                     TestResultCard(
                         state = s,
                         originalEn = currentTest?.contentEn.orEmpty(),
+                        // (2026-06-28) Removed the explicit
+                        // markSentenceTested() call here — the
+                        // ViewModel.submitTranscription() method
+                        // already auto-marks the sentence when the
+                        // STT result passes (see
+                        // PracticeViewModel.submitTranscription,
+                        // where it calls
+                        // `markSentenceTested(currentTest.index, true)`
+                        // before flipping _sttTestState to Passed).
+                        // Calling it again from the UI would be
+                        // redundant (markSentenceTested is idempotent
+                        // — not a bug, just dead code).
+                        //
+                        // (2026-07-03) Also removed the manual
+                        // "mark tested" checkmark button — 下一题
+                        // is always free, "tested" is just a display
+                        // flag surfaced on the sentence grid. The
+                        // checkmark was redundant with the auto-mark
+                        // path above and gave the user a way to mark
+                        // a sentence tested without actually testing
+                        // it, which defeats the practice flow.
                         onNextItem = {
-                            currentTest?.let {
-                                viewModel.markSentenceTested(it.index, true)
-                                viewModel.nextTestItem()
-                                viewModel.resetStt()
-                            }
+                            // (2026-07-05) Route through
+                            // advanceToNextTestItem so the result card
+                            // is cleared at the same time the index
+                            // advances — see PracticeViewModel for
+                            // why the explicit resetStt() used to be
+                            // required on this callsite only.
+                            viewModel.advanceToNextTestItem()
                         },
                         onRerecord = { viewModel.resetStt() },
                         modifier = Modifier
@@ -122,10 +205,14 @@ fun TestingPage(
                         state = s,
                         originalEn = s.original,
                         onNextItem = {
-                            currentTest?.let {
-                                viewModel.nextTestItem()
-                                viewModel.resetStt()
-                            }
+                            // (2026-07-05) Same fix as Passed's
+                            // onNextItem — clear STT state so the
+                            // Failed card disappears when the user
+                            // moves on. Previously the old explicit
+                            // nextTestItem() + resetStt() pair had
+                            // the same risk of being desynced from
+                            // the ControlBar's button.
+                            viewModel.advanceToNextTestItem()
                         },
                         onRerecord = { viewModel.resetStt() },
                         modifier = Modifier
@@ -135,26 +222,46 @@ fun TestingPage(
                 }
             }
 
-            Spacer(Modifier.weight(1f))
-
+            // (2026-07-10) §16.X: Spacer(weight=1f) removed — the card
+            // now claims weight(1f) above, so the ControlBar naturally
+            // sits at the bottom without needing an explicit Spacer.
             // Test control bar
             TestingControlBar(
                 currentIndex = testState.currentTestIndex,
-                totalCount = testState.testItems.size,
-                isTested = currentSentenceState?.isTested == true,
                 isSttListening = sttTestState is SttTestState.Listening,
+                hasRecording = recordingPath != null,
+                isPlayingRecording = isPlayingRecording,
                 onPrevious = { viewModel.previousTestItem() },
-                onMarkTested = {
-                    currentTest?.let {
-                        viewModel.markSentenceTested(it.index, true)
-                        viewModel.nextTestItem()
-                    }
-                },
+                // (2026-07-03) Removed onMarkTested entirely. A sentence
+                // is now marked as tested only by submitting a
+                // transcription that passes the STT matcher — see
+                // PracticeViewModel.submitTranscription which calls
+                // markSentenceTested() on pass. The checkmark button is
+                // gone from the control bar; the 5th slot is now a
+                // plain 下一题 button that always advances.
+                onNextItem = { viewModel.advanceToNextTestItem() },
                 onPlayAudio = {
                     currentTest?.let { viewModel.playSubtitleOnce(it) }
                 },
-                onPressMic = { viewModel.startStt() },
+                onPressMic = {
+                    // Gate on RECORD_AUDIO: without it, SpeechRecognizer
+                    // returns ERROR_INSUFFICIENT_PERMISSIONS (code 9) and
+                    // the result is empty ("未识别到语音"). Asking only on
+                    // press (not on every render) keeps the prompt
+                    // dismissible — same pattern as SpeakingPage.
+                    if (hasRecordPermission) viewModel.startStt()
+                    else permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                },
                 onReleaseMic = { viewModel.stopStt() },
+                // (2026-06-28) Pass testRecordingPath.value
+                // explicitly so the 回放 button can only ever
+                // play test-page recordings. The button is
+                // already disabled by hasRecording = (test page
+                // path != null), so the click is impossible when
+                // there's no test recording — this is the
+                // belt-and-suspenders that the correct path
+                // is used.
+                onPlayRecording = { viewModel.playRecording(viewModel.testRecordingPath.value) },
             )
         }
     }
@@ -163,10 +270,22 @@ fun TestingPage(
 @Composable
 private fun TestingProgressHeader(
     testedCount: Int,
+    // (2026-06-28) Added currentTestIndex so the X/Y display can
+    // show the current test position (1-indexed) — the user's
+    // mental model of "X/Y" is "you are on question X of Y", which
+    // must increment/decrement in lock-step with the 上一题/下一题
+    // buttons. The old display used `testedCount` here, which is
+    // a different semantic ("X out of Y are completed") and
+    // doesn't change when the user navigates back via 上一题.
+    currentTestIndex: Int,
     totalCount: Int,
     isTestActive: Boolean,
     onStartTest: () -> Unit,
-    onResetTest: () -> Unit
+    // (2026-06-28) Replaces the old placeholder `onResetTest`. Wired
+    // to viewModel.restartTest() which un-marks all test items and
+    // re-initializes the test from X=1, so the user can start a new
+    // round of testing at any point while a test is active.
+    onRestartTest: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -184,12 +303,37 @@ private fun TestingProgressHeader(
                     style = MaterialTheme.typography.titleMedium
                 )
                 Text(
-                    if (totalCount > 0) "$testedCount / $totalCount 已完成" else "点击开始测试",
+                    // (2026-06-28) X is now the *current test
+                    // position* (1-indexed: `currentTestIndex + 1`),
+                    // not the tested count. The user's mental model
+                    // of "X / Y" matches what the 上一题/下一题
+                    // buttons do — X must visibly decrement when
+                    // tapping 上一题 and increment when tapping
+                    // 下一题. testedCount is a different concept
+                    // (how many sentences in the pool have been
+                    // marked isTested=true) and only changes when
+                    // the user marks a sentence as tested; it can
+                    // drift up independently of navigation (e.g.
+                    // marking the same question twice from the
+                    // previous-page card).
+                    //
+                    // Clamped to totalCount in the (theoretical)
+                    // case where currentTestIndex exceeds the test
+                    // pool size after a re-init.
+                    if (totalCount > 0)
+                        "第 ${(currentTestIndex + 1).coerceAtMost(totalCount)} / $totalCount 题"
+                    else
+                        "点击开始测试",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
+            // (2026-06-28) Top-right action: 开始测试 (when not
+            // active) or 重新测试 (when active). The two states
+            // occupy the same horizontal slot to keep the header's
+            // layout stable as the user toggles between "not
+            // started" and "in progress".
             if (!isTestActive) {
                 Button(
                     onClick = onStartTest,
@@ -202,6 +346,26 @@ private fun TestingProgressHeader(
                     )
                     Spacer(Modifier.width(4.dp))
                     Text("开始测试")
+                }
+            } else {
+                // "重新测试" — outlined button with refresh icon.
+                // Outlined (not filled) to keep it visually less
+                // prominent than the original 开始测试 filled button
+                // — a user mid-test shouldn't feel like the app is
+                // pushing them to restart. The icon (Refresh) is
+                // the standard "restart" affordance; the text label
+                // makes the action unambiguous.
+                OutlinedButton(
+                    onClick = onRestartTest,
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("重新测试")
                 }
             }
         }
@@ -276,7 +440,15 @@ private fun TestingSubtitleCard(
         )
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            // (2026-07-10) §16.X: Add verticalScroll so a very long
+            // sentence (10+ word lines) doesn't overflow the card.
+            // Combined with the outer weight(1f) on TestingSubtitleCard,
+            // this keeps the bottom control bar at its natural height —
+            // previously a long card pushed the ControlBar off-screen,
+            // making the bottom buttons look "compressed".
+            modifier = Modifier
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.Start
         ) {
             Row(
@@ -367,7 +539,12 @@ private fun TestingWordsFlowRow(
 
     Column(
         modifier = modifier,
-        horizontalAlignment = Alignment.Start
+        // (2026-07-10) §16.X: Center each line of words horizontally
+        // instead of left-aligning. Short lines used to look "concentrated
+        // on the left" with empty space on the right; centering makes
+        // each row read as a visually balanced unit regardless of word
+        // count per line.
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         lines.forEach { lineWords ->
             Row(
@@ -414,18 +591,25 @@ private fun TestingWordsFlowRow(
 @Composable
 private fun TestingControlBar(
     currentIndex: Int,
-    totalCount: Int,
-    isTested: Boolean,
     isSttListening: Boolean,
+    hasRecording: Boolean,
+    isPlayingRecording: Boolean,
     onPrevious: () -> Unit,
-    onMarkTested: () -> Unit,
+    // (2026-07-03) Removed the old onMarkTested parameter. A sentence
+    // is now marked tested only via submitTranscription() passing the
+    // STT matcher — there is no manual "mark complete" path anymore,
+    // per user request "勾 去掉". This bar's 5th slot is just 下一题
+    // and always advances.
+    onNextItem: () -> Unit,
     onPlayAudio: () -> Unit,
     onPressMic: () -> Unit,
     onReleaseMic: () -> Unit,
+    onPlayRecording: () -> Unit,
 ) {
     // Pill-shaped background frame matching the other practice pages'
     // bottom bars. Houses 4 large action buttons (previous / play
-    // audio / mic-grade / mark tested) with consistent visual depth.
+    // audio / mic / play recording / 下一题) with consistent
+    // visual depth.
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -465,7 +649,7 @@ private fun TestingControlBar(
                 }
             }
 
-            // 2. Play audio
+            // 2. Play audio (the original sentence's TTS)
             IconButton(onClick = onPlayAudio) {
                 Surface(
                     shape = CircleShape,
@@ -480,35 +664,62 @@ private fun TestingControlBar(
                 }
             }
 
-            // 3. Microphone (press and hold to record, release to stop)
-            // Visual feedback: button scales up + 3 concentric ripple rings expand
-            // outward (like a speaker broadcasting) when held. The pointerInput
-            // stays on the OUTER box so the press area is the full ripple zone,
-            // not just the inner button.
-            ListeningMicButton(
+            // 3. Microphone (press and hold to record, release to stop).
+            // Restored to the original look per user spec:
+            //   - no ripple rings (the in-overlay sound waves now carry
+            //     the active-feedback signal)
+            //   - no scale-up animation
+            //   - button is bigger (72dp) for a more confident tap target
+            //   - color flips to red on press
+            MicButton(
                 isListening = isSttListening,
                 onPress = onPressMic,
                 onRelease = onReleaseMic,
             )
 
-            // 4. Mark tested / Next
-            IconButton(onClick = onMarkTested) {
+            // 4. Play back the user's just-recorded audio. Disabled
+            // until the user has finished at least one recording in
+            // the current STT session; the icon swaps to Stop while
+            // audio is playing.
+            IconButton(
+                onClick = onPlayRecording,
+                enabled = hasRecording
+            ) {
                 Surface(
                     shape = CircleShape,
-                    color = if (isTested)
+                    color = if (hasRecording)
                         MaterialTheme.colorScheme.secondaryContainer
                     else
-                        MaterialTheme.colorScheme.primary,
+                        MaterialTheme.colorScheme.surfaceVariant,
                     modifier = Modifier.size(54.dp)
                 ) {
                     Icon(
-                        if (isTested) Icons.Default.SkipNext else Icons.Default.Check,
-                        if (isTested) "下一题" else "标记完成",
+                        if (isPlayingRecording) Icons.Default.Stop else Icons.Default.PlayArrow,
+                        if (isPlayingRecording) "停止回放" else "回放录音",
                         modifier = Modifier.size(26.dp),
-                        tint = if (isTested)
+                        tint = if (hasRecording)
                             MaterialTheme.colorScheme.onSecondaryContainer
                         else
-                            MaterialTheme.colorScheme.onPrimary
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // 5. Next — always advances; the mark-tested checkmark
+            // branch was removed per user spec (2026-07-03). A
+            // sentence is now marked tested solely by
+            // submitTranscription() passing the STT matcher.
+            IconButton(onClick = onNextItem) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(54.dp)
+                ) {
+                    Icon(
+                        Icons.Default.SkipNext,
+                        "下一题",
+                        modifier = Modifier.size(26.dp),
+                        tint = MaterialTheme.colorScheme.onPrimary
                     )
                 }
             }
@@ -517,23 +728,34 @@ private fun TestingControlBar(
 }
 
 /**
- * Press-and-hold mic button. When [isListening] is true:
- * - 3 concentric ripple rings expand outward from the button (staggered 600ms)
- * - The button itself scales up 1.15x
- * - The button turns red (error color)
+ * Press-and-hold mic button. While the user holds:
+ * - button color flips from primaryContainer to error (red)
+ * - NO ripple / scale animation (those have been moved into the
+ *   [RecordingOverlay] which now carries the active-feedback signal
+ *   on its own, so the bar around the mic stays calm and the
+ *   overlay is the focal point)
  *
- * The pointerInput sits on the outer 140dp Box so the press target
- * stays generous even though the button visually appears at 54dp.
+ * (2026-07-10) §12.42: Sized 54dp + icon 26dp — UNIFIED with the
+ * SpeakingPage mic button so the bottom bar's row intrinsic height
+ * matches. Previous version was 72dp / 34dp icon which made Testing
+ * page's bottom pill visibly TALLER than 精听 / 泛听's same-shape
+ * pill. The microphone is no longer the "primary" oversized action
+ * anywhere — the RecordingOverlay carries the focal-point signal.
  */
 @Composable
-private fun ListeningMicButton(
+private fun MicButton(
     isListening: Boolean,
     onPress: () -> Unit,
     onRelease: () -> Unit,
 ) {
     Box(
         modifier = Modifier
-            .size(140.dp)
+            // (2026-07-10) §12.42: 72dp → 54dp to match SpeakingPage's
+            // (SpeakingPage.kt:608-615) `Box.size(54.dp)` recording
+            // button. The 26dp icon keeps visual weight without
+            // inflating the row's intrinsic height — Testing's
+            // bottom pill now matches 精听/泛听's.
+            .size(54.dp)
             .pointerInput(Unit) {
                 detectTapGestures(
                     onPress = {
@@ -545,26 +767,19 @@ private fun ListeningMicButton(
             },
         contentAlignment = Alignment.Center,
     ) {
-        // Ripple rings — only when listening. No parent .clip() so
-        // they can extend beyond the 140dp box bounds.
-        if (isListening) {
-            repeat(3) { index ->
-                MicRippleRing(delayMs = index * 600L)
-            }
-        }
-        // The actual mic button (scales up when listening)
         Surface(
             shape = CircleShape,
             color = if (isListening) MaterialTheme.colorScheme.error
                     else MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier
-                .size(54.dp)
-                .scale(if (isListening) 1.15f else 1f),
+            modifier = Modifier.fillMaxSize()
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     Icons.Default.Mic,
                     contentDescription = if (isListening) "正在录音，松开结束" else "按住录音",
+                    // (2026-07-10) §12.42: 34dp → 26dp to match
+                    // SpeakingPage's recording button icon
+                    // (SpeakingPage.kt:626).
                     modifier = Modifier.size(26.dp),
                     tint = if (isListening)
                         MaterialTheme.colorScheme.onError
@@ -576,33 +791,79 @@ private fun ListeningMicButton(
     }
 }
 
+/**
+ * "正在识别" card shown briefly between releasing the mic and the
+ * editor appearing. Vosk runs on the recorded WAV file — usually
+ * 100-500ms on a warm device, but can be many seconds on first use
+ * while the ~40MB acoustic model is being downloaded.
+ *
+ * Surfaces download progress inline so the user isn't staring at an
+ * unexplained spinner.
+ */
 @Composable
-private fun MicRippleRing(delayMs: Long) {
-    val transition = rememberInfiniteTransition(label = "ripple_$delayMs")
-    val scale by transition.animateFloat(
-        initialValue = 1f,
-        targetValue = 2.4f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1800, delayMillis = delayMs.toInt()),
-            repeatMode = RepeatMode.Restart,
+private fun TranscribingCard(
+    downloadState: com.echoling.app.speech.ModelManager.DownloadState,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.material3.Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
         ),
-        label = "ripple_scale_$delayMs"
-    )
-    val alpha by transition.animateFloat(
-        initialValue = 0.45f,
-        targetValue = 0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1800, delayMillis = delayMs.toInt()),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "ripple_alpha_$delayMs"
-    )
-    Box(
-        modifier = Modifier
-            .size(54.dp)
-            .scale(scale)
-            .alpha(alpha)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.error.copy(alpha = 0.4f))
-    )
+        modifier = modifier
+    ) {
+        Column(
+            Modifier.padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            androidx.compose.material3.CircularProgressIndicator(
+                modifier = Modifier.size(40.dp),
+                strokeWidth = 3.dp
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "正在识别…",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(4.dp))
+            when (val d = downloadState) {
+                is com.echoling.app.speech.ModelManager.DownloadState.Deploying -> {
+                    // (2026-07-04) First-run: model is being copied
+                    // out of APK assets into internal storage
+                    // (~68 MB unpacked). Was a network download
+                    // before the offline cutover; the user-facing
+                    // copy is now "正在准备识别模型" so the message
+                    // doesn't claim a network step that no longer
+                    // exists.
+                    val pct = (d.progress * 100).toInt()
+                    Text(
+                        "首次使用：正在准备识别模型 ($pct%)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = d.progress,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                is com.echoling.app.speech.ModelManager.DownloadState.Failed -> {
+                    Text(
+                        "模型加载失败：${d.message}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                else -> {
+                    // NotStarted / Ready — model is fine, Vosk is just
+                    // processing the audio.
+                    Text(
+                        "请稍候",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
 }

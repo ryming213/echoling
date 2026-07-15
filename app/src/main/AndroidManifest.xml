@@ -1,10 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
-    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <!-- (2026-07-04) INTERNET + ACCESS_NETWORK_STATE removed.
+         The app is fully offline: the Vosk STT model is bundled
+         in `assets/models/` and copied to internal storage by
+         [com.echoling.app.speech.ModelManager] on first launch —
+         no network code path remains in the codebase. Declaring
+         either of these would fail the 国内应用商店 "用不到的网络
+         权限" review (华为 / 小米 / OPPO / vivo / 应用宝 all flag
+         undeclared-but-unused network perms and ask for a
+         justification that doesn't exist). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!--

@@ -78,7 +78,7 @@ fun StatisticsScreen(
                         // already exceed the first screen.
                         .verticalScroll(rememberScrollState())
                         .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                 // Streak card
                 StreakCard(streak = uiState.currentStreak)
@@ -120,15 +120,21 @@ fun StatisticsScreen(
                     )
                 }
 
-                // §12.21: monthly activity (last 30 days) — rendered
-                // as a calendar heatmap (GitHub-style), positioned
-                // ABOVE the 7-day chart so it lands within the first
-                // screen on a typical phone. The 7-day bar chart
-                // then supplements with precise per-day time numbers.
-                MonthlyActivityChart(monthlyStats = uiState.monthlyStats)
-
-                // Weekly activity
+                // (2026-07-04) Re-ordered: weekly 7-day bar chart now
+                // sits ABOVE the 30-day heatmap so the user sees the
+                // most-recent / most-actionable view first ("how did
+                // this week go?"), then the longer context below
+                // ("how did the month look?"). Previously the 30-day
+                // heatmap was on top per §12.21's "lands within first
+                // screen" rationale — that priority no longer wins
+                // over the recency-first reading order.
                 WeeklyActivityChart(dailyStats = uiState.dailyStats)
+
+                // §12.21: monthly activity (last 30 days) — rendered
+                // as a calendar heatmap (GitHub-style). Now below the
+                // 7-day bar chart; the heatmap is the longer context
+                // view, and the bars give the precise per-day numbers.
+                MonthlyActivityChart(monthlyStats = uiState.monthlyStats)
             }
             }
         }
@@ -146,7 +152,7 @@ private fun StreakCard(streak: Int) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(20.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
@@ -162,7 +168,12 @@ private fun StreakCard(streak: Int) {
             Column {
                 Text(
                     text = "$streak day${if (streak != 1) "s" else ""}",
-                    style = MaterialTheme.typography.headlineMedium,
+                    // (2026-07-04) was headlineMedium (28sp) — too
+                    // dominant against the 48dp LocalFireDepartment
+                    // icon. Dropped one step to headlineSmall (24sp)
+                    // so the streak number shares visual weight with
+                    // the icon instead of dwarfing it.
+                    style = MaterialTheme.typography.headlineSmall,
                     color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
                 Text(
@@ -191,7 +202,7 @@ private fun StatCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Icon(
@@ -200,10 +211,15 @@ private fun StatCard(
                 modifier = Modifier.size(24.dp),
                 tint = MaterialTheme.colorScheme.primary
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = value,
-                style = MaterialTheme.typography.headlineSmall
+                // (2026-07-04) was headlineSmall (24sp) — the four
+                // stat cards' big numbers dominated the page. Dropped
+                // one step to titleLarge (22sp) so each value still
+                // reads as the focal point but doesn't overpower the
+                // bodySmall (12sp) label underneath.
+                style = MaterialTheme.typography.titleLarge
             )
             Text(
                 text = label,
@@ -220,13 +236,13 @@ private fun WeeklyActivityChart(dailyStats: List<DailyStatistic>) {
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
-            modifier = Modifier.padding(16.dp)
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
             Text(
                 text = "Last 7 Days",
                 style = MaterialTheme.typography.titleMedium
             )
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             LazyRow(
                 modifier = Modifier.fillMaxWidth(),
@@ -274,7 +290,7 @@ private fun MonthlyActivityChart(monthlyStats: List<DailyStatistic>) {
     val grid = remember(monthlyStats) { buildMonthlyHeatGrid(monthlyStats) }
 
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -290,7 +306,7 @@ private fun MonthlyActivityChart(monthlyStats: List<DailyStatistic>) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Day-of-week header row — Chinese "一二三四五六日" so the
             // first column is Monday, matching the calendar
@@ -407,12 +423,14 @@ private fun MonthlyHeatCell(
         (learnTimeMs.toFloat() / maxTimeMs).coerceIn(0f, 1f)
     } else 0f
 
-    // Today uses a fixed primary fill + larger bold white number,
-    // regardless of learn time. This makes today easy to find and
-    // removes the need to interpret color intensity on that cell.
+    // Today uses a soft primaryContainer fill + larger bold dark-violet
+    // number, regardless of learn time. This makes today easy to find
+    // and removes the need to interpret color intensity on that cell,
+    // while keeping visual weight in the same family as the rest of
+    // the grid (violet-200 instead of full primary).
     // Other cells: gradient intensity by learn-time ratio.
     val fillColor = if (isToday) {
-        MaterialTheme.colorScheme.primary
+        MaterialTheme.colorScheme.primaryContainer
     } else when {
         ratio == 0f -> MaterialTheme.colorScheme.surfaceVariant
         ratio < 0.25f -> MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
@@ -421,10 +439,11 @@ private fun MonthlyHeatCell(
         else -> MaterialTheme.colorScheme.primary
     }
 
-    // Today is always white-on-primary. For other cells, white text
+    // Today is dark-violet-on-light-violet (primaryContainer / onPrimaryContainer
+    // pair from §11.2 brand palette). For other cells, white text
     // on the two darkest intensity levels for contrast.
     val numberColor = if (isToday) {
-        MaterialTheme.colorScheme.onPrimary
+        MaterialTheme.colorScheme.onPrimaryContainer
     } else when {
         ratio >= 0.5f -> MaterialTheme.colorScheme.onPrimary
         else -> MaterialTheme.colorScheme.onSurface

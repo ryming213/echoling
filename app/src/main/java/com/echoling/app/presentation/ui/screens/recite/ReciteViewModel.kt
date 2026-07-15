@@ -6,6 +6,7 @@ import com.echoling.app.data.local.db.entity.ReciteProgressEntity
 import com.echoling.app.domain.model.DictCategory
 import com.echoling.app.domain.usecase.GetDictionaryCategoriesUseCase
 import com.echoling.app.domain.usecase.ObserveAllReciteProgressUseCase
+import com.echoling.app.domain.usecase.WarmupDictionaryUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -51,6 +52,7 @@ data class ReciteUiState(
 @HiltViewModel
 class ReciteViewModel @Inject constructor(
     private val getDictionaryCategories: GetDictionaryCategoriesUseCase,
+    private val warmupDictionary: WarmupDictionaryUseCase,
     private val observeAllReciteProgress: ObserveAllReciteProgressUseCase,
 ) : ViewModel() {
 
@@ -69,6 +71,13 @@ class ReciteViewModel @Inject constructor(
                 categories = cats,
                 isLoading = false,
             )
+            // After Phase 1 (manifest) is rendered, kick off Phase 3
+            // (full lookup build) on a background coroutine so the user
+            // — who is currently staring at the picker — doesn't pay
+            // the 12 MB parse cost. By the time they tap into a
+            // category, the per-category cache is already populated.
+            // See `DictionaryRepositoryImpl.warmupAll`.
+            warmupDictionary()
         }
     }
 

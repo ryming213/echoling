@@ -28,7 +28,7 @@ data class StatisticsUiState(
     val dailyStats: List<DailyStatistic> = emptyList(),
     /**
      * 30-day activity, day 0 = today. Same shape as [dailyStats] but
-     * without "Today"/"Yesterday" labels — days 2..29 use the weekday
+     * without "今天"/"昨天" labels — days 2..29 use the weekday
      * short name (Mon, Tue, ...) so the labels fit in the thin bar
      * chart.
      */
@@ -159,8 +159,8 @@ class StatisticsViewModel @Inject constructor(
             val sentencesLearned = dayProgress.sumOf { it.learnedSentences }
 
             val dayLabel = when {
-                showTodayLabel && i == 0 -> "Today"
-                showTodayLabel && i == 1 -> "Yesterday"
+                showTodayLabel && i == 0 -> "今天"
+                showTodayLabel && i == 1 -> "昨天"
                 else -> {
                     calendar.timeInMillis = dayStart
                     calendar.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, java.util.Locale.getDefault()) ?: ""

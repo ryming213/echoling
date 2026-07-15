@@ -34,6 +34,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -125,7 +126,11 @@ fun CourseListItem(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = course.title,
-                        style = MaterialTheme.typography.titleMedium,
+                        // titleMedium (16sp) → titleSmall (14sp): kept
+                        // in lock-step with ContinueLearningCard and
+                        // CourseGroupItem so the courses area type
+                        // system stays consistent end-to-end.
+                        style = MaterialTheme.typography.titleSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -154,7 +159,12 @@ fun CourseListItem(
                                 imageVector = Icons.Outlined.Headphones,
                                 contentDescription = "Has audio",
                                 modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.primary,
+                                // §12.32c: small capability icons
+                                // (headphones / video / mic) lightened
+                                // to violet-400 along with the rest of
+                                // the brand purple elements on this
+                                // screen.
+                                tint = Color(0xFFA78BFA),
                             )
                         }
                         if (hasVideo) {
@@ -162,7 +172,7 @@ fun CourseListItem(
                                 imageVector = Icons.Outlined.VideoFile,
                                 contentDescription = "Has video",
                                 modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.primary,
+                                tint = Color(0xFFA78BFA),
                             )
                         }
                         if (hasSubtitles) {
@@ -170,7 +180,7 @@ fun CourseListItem(
                                 imageVector = Icons.Outlined.Mic,
                                 contentDescription = "Has subtitles",
                                 modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.primary,
+                                tint = Color(0xFFA78BFA),
                             )
                         }
                         Spacer(modifier = Modifier.weight(1f))
@@ -199,6 +209,15 @@ fun CourseListItem(
                 FilledIconButton(
                     onClick = onClick,
                     modifier = Modifier.size(48.dp),
+                    // (2026-07-04) Reverted the per-lesson "Start"
+                    // play button back to M3's default
+                    // `primary` (deep violet-600 #7C3AED) container
+                    // + `onPrimary` (white) content. The user
+                    // preferred the deeper brand purple over the
+                    // §12.32c lightened violet-400 (#A78BFA) — the
+                    // latter blended with the rest of the screen
+                    // and made the CTA read as decorative rather
+                    // than actionable.
                 ) {
                     Icon(
                         imageVector = Icons.Default.PlayArrow,
@@ -212,9 +231,11 @@ fun CourseListItem(
 }
 
 /**
- * Pick an accent color for the difficulty tier. A* → primary purple,
- * B* → tertiary deeper purple, C* → secondary. Unknown strings fall back
- * to primary so the bar is always visible.
+ * Pick an accent color for the difficulty tier. A* → lighter purple
+ * (violet-400), B* → lighter purple (violet-500), C* → secondary
+ * (violet-500). Unknown strings fall back to violet-400 so the bar
+ * is always visible. The three difficulty tiers stay distinguishable
+ * through the three brand-purple shades.
  *
  * Marked @Composable because [MaterialTheme.colorScheme] is only readable
  * inside the composition.
@@ -222,12 +243,12 @@ fun CourseListItem(
 @Composable
 private fun accentColorFor(difficulty: String): Color = when {
     difficulty.startsWith("A", ignoreCase = true) ->
-        MaterialTheme.colorScheme.primary
+        Color(0xFFA78BFA)
     difficulty.startsWith("B", ignoreCase = true) ->
-        MaterialTheme.colorScheme.tertiary
+        Color(0xFF8B5CF6)
     difficulty.startsWith("C", ignoreCase = true) ->
         MaterialTheme.colorScheme.secondary
-    else -> MaterialTheme.colorScheme.primary
+    else -> Color(0xFFA78BFA)
 }
 
 private fun formatDuration(ms: Long): String {

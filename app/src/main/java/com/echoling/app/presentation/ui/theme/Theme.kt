@@ -10,7 +10,6 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
@@ -99,7 +98,26 @@ fun EchoLingTheme(
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            window.statusBarColor = colorScheme.surface.toArgb()
+            // (2026-06-28) Do NOT set `window.statusBarColor` here. We
+            // call `enableEdgeToEdge()` in MainActivity which already
+            // makes the status bar transparent and configures the
+            // appropriate scrim. Re-painting it with the surface color
+            // undoes the edge-to-edge setup and makes the status bar
+            // look like a separate "band" at the top of the screen,
+            // visually separated from the page content below — the
+            // user reports the page is not "adjacent to the top of
+            // the phone screen", but in fact the content IS correctly
+            // positioned right below the status bar inset; it's the
+            // opaque status bar background that creates the visible
+            // step. Letting the bar stay transparent lets the
+            // activity's Surface (drawn by `setContent`) fill the
+            // status-bar area too, so the user sees one continuous
+            // color from the very top of the screen down to the
+            // body content, with the system icons floating on top.
+            //
+            // We still configure the icon tint (dark icons on light
+            // backgrounds, light icons on dark backgrounds) — that's
+            // the only thing that's safe to set after enableEdgeToEdge.
             WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
         }
     }

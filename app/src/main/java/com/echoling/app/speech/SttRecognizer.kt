@@ -75,7 +75,7 @@ class SttRecognizer @Inject constructor(
                     Log.d(TAG, "onEndOfSpeech")
                 }
                 override fun onError(error: Int) {
-                    Log.w(TAG, "onError: $error")
+                    Log.w(TAG, "onError: $error (this listener attached to recognizer=$this@apply)")
                     _events.tryEmit(SttEvent.Error(error, "SpeechRecognizer error code: $error"))
                     teardown()
                 }

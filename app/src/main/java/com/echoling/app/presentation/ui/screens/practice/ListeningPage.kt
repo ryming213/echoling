@@ -1,9 +1,6 @@
 package com.echoling.app.presentation.ui.screens.practice
 
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -23,7 +20,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.echoling.app.player.subtitle.Subtitle
-import com.echoling.app.player.subtitle.SubtitleMode
 import com.echoling.app.presentation.viewmodel.PracticeViewModel
 
 @Composable
@@ -34,7 +30,6 @@ fun ListeningPage(
     val playbackState by viewModel.playbackState.collectAsState()
     val subtitles by viewModel.subtitles.collectAsState()
     val currentSubtitleIndex by viewModel.currentSubtitleIndex.collectAsState()
-    val subtitleMode by viewModel.subtitleMode.collectAsState()
     val isVideoMode by viewModel.isVideoMode.collectAsState()
     val videoPlayerState by viewModel.videoPlayerState.collectAsState()
 
@@ -91,7 +86,6 @@ fun ListeningPage(
                 val revealedWords = revealedWordsMap[index] ?: emptySet()
                 ListeningSubtitleListItem(
                     subtitle = subtitle,
-                    subtitleMode = subtitleMode,
                     isActive = index == currentSubtitleIndex,
                     onClick = { viewModel.playSubtitleOnce(subtitle) },
                     listIndex = index + 1,
@@ -314,11 +308,9 @@ private fun ListeningBottomControls(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ListeningSubtitleListItem(
     subtitle: Subtitle,
-    subtitleMode: SubtitleMode,
     isActive: Boolean,
     onClick: () -> Unit,
     listIndex: Int,
@@ -333,10 +325,14 @@ private fun ListeningSubtitleListItem(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            // Use pointerInput + detectTapGestures (NOT Modifier.clickable)
-            // so the parent only handles taps and never long-press.
-            // This is what lets the child words' combinedClickable
-            // long-press handlers fire in the showSubtitles branch.
+            // §12.34: use pointerInput + detectTapGestures (NOT
+            // Modifier.clickable) so the parent only handles taps and
+            // never long-press. This is what lets the child words'
+            // combinedClickable long-press handlers fire in the
+            // showSubtitles branch. The tap handler is what fires for
+            // taps that land on whitespace / Chinese / the index
+            // number / the active indicator — taps on word Boxes are
+            // handled by the words themselves (see below).
             .pointerInput(onClick) {
                 detectTapGestures(onTap = { onClick() })
             },
@@ -379,24 +375,26 @@ private fun ListeningSubtitleListItem(
             Spacer(Modifier.width(8.dp))
 
             if (showSubtitles) {
-                // Visible text — long-press any word to translate it.
-                // Match the same bodyMedium style and font size as the
-                // hidden-mode blocks so the layout doesn't jump when
-                // toggling the subtitle visibility.
+                // Visible text — long-press any word to translate it,
+                // tap any word to play this sentence.
+                // §12.35: always renders ENGLISH only (no Chinese /
+                // bilingual branches — the page only displays English).
                 ListeningVisibleSubtitleText(
                     subtitle = subtitle,
-                    subtitleMode = subtitleMode,
                     onWordLongPress = onWordTranslate,
+                    onSentenceClick = onClick,
                     modifier = Modifier.weight(1f),
                 )
             } else {
                 // Show hidden words as covered blocks with long-press to reveal
                 Column(modifier = Modifier.weight(1f)) {
-                    // English words with wrapping
+                    // English words with wrapping — tap a block to play
+                    // this sentence, long-press to reveal the word.
                     ListeningHiddenWordsFlowRow(
                         words = words,
                         revealedWords = revealedWords,
                         onWordLongPress = onWordLongPress,
+                        onSentenceClick = onClick,
                         modifier = Modifier.fillMaxWidth()
                     )
 
@@ -416,18 +414,21 @@ private fun ListeningSubtitleListItem(
 }
 
 /**
- * Renders the subtitle in [SubtitleMode.BILINGUAL] / [SubtitleMode.ENGLISH]
- * / [SubtitleMode.CHINESE] as inline Text composables that wrap
- * naturally. English words are long-pressable to translate; Chinese
- * text and punctuation are plain. Whitespace between tokens is preserved
- * via explicit [Text](" ").
+ * Renders the subtitle as inline Text composables that wrap
+ * naturally. §12.35: the practice page only displays English now
+ * (the subtitle-mode pill is gone), so this function is ENGLISH-only
+ * — no bilingual / Chinese branches.
+ *
+ * English words are tappable (play this sentence) and long-pressable
+ * (translate it). Whitespace between tokens is preserved via explicit
+ * [Text](" ").
  */
-@OptIn(ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun ListeningVisibleSubtitleText(
     subtitle: Subtitle,
-    subtitleMode: SubtitleMode,
     onWordLongPress: (String) -> Unit,
+    onSentenceClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val enText = subtitle.contentEn
@@ -441,9 +442,7 @@ private fun ListeningVisibleSubtitleText(
             .filter { it.isNotEmpty() }
     }
 
-    val showEn = subtitleMode != SubtitleMode.CHINESE && enText.isNotEmpty()
-    val showCn = subtitleMode != SubtitleMode.ENGLISH && subtitle.contentCn.isNotEmpty()
-    val cnText = subtitle.contentCn
+    val showEn = enText.isNotEmpty()
 
     val style = MaterialTheme.typography.bodyMedium
     val color = MaterialTheme.colorScheme.onSurface
@@ -464,16 +463,30 @@ private fun ListeningVisibleSubtitleText(
                         // Punctuation only — no word to translate.
                         Text(text = token, style = style, color = color)
                     } else {
-                        // Wrap in a Box with a tiny bit of horizontal
-                        // padding so the long-press hit-target is more
-                        // forgiving than the bare glyph bounds.
+                        // §12.34: each word is a tap+long-press
+                        // Box. Tap plays the whole sentence (the
+                        // parent's onClick); long-press translates
+                        // this word. Using pointerInput +
+                        // detectTapGestures (NOT combinedClickable)
+                        // so the press does NOT show the M3 ripple —
+                        // words are inline text, not buttons, and the
+                        // ripple on a press in the middle of a flowing
+                        // sentence reads as visual noise. The hit
+                        // target is unchanged; only the visual
+                        // feedback is suppressed. Whitespace /
+                        // Chinese / index / active indicator taps
+                        // still fall through to the parent Surface's
+                        // detectTapGestures handler and play the
+                        // sentence the same way.
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))
-                                .combinedClickable(
-                                    onClick = { },
-                                    onLongClick = { onWordLongPress(clean) },
-                                )
+                                .pointerInput(onSentenceClick, clean) {
+                                    detectTapGestures(
+                                        onTap = { onSentenceClick() },
+                                        onLongPress = { onWordLongPress(clean) },
+                                    )
+                                }
                                 .padding(horizontal = 2.dp, vertical = 2.dp),
                             contentAlignment = Alignment.Center,
                         ) {
@@ -483,16 +496,6 @@ private fun ListeningVisibleSubtitleText(
                 }
             }
         }
-        if (showEn && showCn) {
-            Text(text = "  |  ", style = style, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        if (showCn) {
-            Text(
-                text = cnText,
-                style = style,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
     }
 }
 
@@ -501,6 +504,7 @@ private fun ListeningHiddenWordsFlowRow(
     words: List<String>,
     revealedWords: Set<Int>,
     onWordLongPress: (Int) -> Unit,
+    onSentenceClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     // Pre-calculate which words fit on each line
@@ -544,6 +548,7 @@ private fun ListeningHiddenWordsFlowRow(
                     HiddenWordBlock(
                         word = cleanWord,
                         isRevealed = isRevealed,
+                        onClick = onSentenceClick,
                         onLongPress = { onWordLongPress(index) }
                     )
                     Spacer(modifier = Modifier.width(4.dp))
@@ -554,28 +559,49 @@ private fun ListeningHiddenWordsFlowRow(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun HiddenWordBlock(
     word: String,
     isRevealed: Boolean,
+    onClick: () -> Unit,
     onLongPress: () -> Unit
 ) {
     if (isRevealed) {
-        Text(
-            text = word,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface
-        )
+        // §12.34: even when revealed, tap on a word plays the
+        // sentence. §12.34a: pointerInput + detectTapGestures
+        // (NOT combinedClickable) so the press does NOT show the
+        // M3 ripple on the word block.
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .pointerInput(onClick, onLongPress) {
+                    detectTapGestures(
+                        onTap = { onClick() },
+                        onLongPress = { onLongPress() },
+                    )
+                }
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = word,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
     } else {
+        // §12.34a: pointerInput + detectTapGestures — no M3 ripple
+        // when the user taps a hidden word block.
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(4.dp))
                 .background(Color(0xFFE0E0E0))
-                .combinedClickable(
-                    onClick = { },
-                    onLongClick = onLongPress
-                )
+                .pointerInput(onClick, onLongPress) {
+                    detectTapGestures(
+                        onTap = { onClick() },
+                        onLongPress = { onLongPress() },
+                    )
+                }
                 .padding(horizontal = 6.dp, vertical = 2.dp),
             contentAlignment = Alignment.Center
         ) {

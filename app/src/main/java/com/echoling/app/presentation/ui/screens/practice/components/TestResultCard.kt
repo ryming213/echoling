@@ -61,9 +61,18 @@ fun TestResultCard(
                     style = MaterialTheme.typography.labelMedium,
                     color = contentColor
                 )
+                // (2026-06-28) Pass the per-word match flags
+                // through. The old call site only sent origWords /
+                // transWords, which forced WordChipsRow to compare
+                // position-wise and gave the user false-positives
+                // like "first word wrong → all subsequent words
+                // wrong". Now each chip colors itself from its
+                // own flag.
                 WordChipsRow(
                     origWords = state.origWords,
-                    transWords = state.transWords
+                    transWords = state.transWords,
+                    origMatched = state.origMatched,
+                    transMatched = state.transMatched
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
@@ -94,36 +103,100 @@ fun TestResultCard(
     }
 }
 
+/**
+ * Renders the word-by-word comparison after a failed STT submission.
+ *
+ * (2026-06-28) Rewritten to use POSITION-INDEPENDENT match flags
+ * (origMatched / transMatched) instead of position-by-position
+ * equality. Two changes from the previous version:
+ *
+ *   1. **No more "orig/trans" slash.** When a word is wrong, the
+ *      chip shows ONLY the wrong word (e.g. "checks") — the
+ *      original ("check") is already displayed in the "原句"
+ *      section above, so showing it again in the chip was
+ *      redundant. Color alone communicates "wrong".
+ *
+ *   2. **Two parallel rows, not one interleaved row.** The
+ *      previous version iterated `for i in 0..maxLen` and
+ *      combined orig[i] with trans[i] at the same position —
+ *      which meant an unmatched orig word at position 0 (e.g.
+ *      STT dropped "to") would visually "push" the rest of the
+ *      alignment off-by-one, even though every subsequent word
+ *      was actually correct. The new layout shows the orig row
+ *      and the trans row independently, each chip colored by
+ *      its own `matched` flag. A wrong word at position 0 no
+ *      longer affects how position 3 renders.
+ *
+ * Color semantics:
+ *   - **Green (origMatched / transMatched = true)**: this word
+ *     was successfully aligned with a counterpart on the other
+ *     side. No problem.
+ *   - **Red (origMatched = false)**: orig word that the user
+ *     didn't say at all (missing) or said as a different word
+ *     (the user's wrong word shows on the trans row instead).
+ *   - **Yellow (transMatched = false)**: extra word the user
+ *     said that wasn't in the original at all.
+ *
+ * The colors mirror the convention used elsewhere in the app
+ * (e.g. "red = wrong" for sentence completion states).
+ */
 @Composable
 private fun WordChipsRow(
     origWords: List<String>,
-    transWords: List<String>
+    transWords: List<String>,
+    origMatched: BooleanArray,
+    transMatched: BooleanArray
 ) {
-    val maxLen = maxOf(origWords.size, transWords.size)
-    FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        for (i in 0 until maxLen) {
-            val orig = origWords.getOrNull(i)
-            val trans = transWords.getOrNull(i)
-            val (display, bg) = when {
-                trans == null -> "[$orig]" to Color(0xFFFFCDD2)
-                orig == null -> "[$trans]" to Color(0xFFFFF9C4)
-                orig == trans -> orig to Color(0xFFC8E6C9)
-                else -> "$orig/$trans" to Color(0xFFFFCDD2)
-            }
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = bg
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // Row 1: original sentence. Green if matched, red if not.
+        if (origWords.isNotEmpty()) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Text(
-                    display,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                origWords.forEachIndexed { i, word ->
+                    val matched = origMatched.getOrNull(i) == true
+                    WordChip(
+                        text = word,
+                        bg = if (matched) Color(0xFFC8E6C9) else Color(0xFFFFCDD2)
+                    )
+                }
             }
         }
+        // Row 2: user's transcription. Green if matched, yellow
+        // if "extra" (not in the original at all). We deliberately
+        // do NOT use red here — the user said an extra word, not
+        // a wrong one, so the visual cue should be milder than
+        // "you got this wrong".
+        if (transWords.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                transWords.forEachIndexed { j, word ->
+                    val matched = transMatched.getOrNull(j) == true
+                    WordChip(
+                        text = word,
+                        bg = if (matched) Color(0xFFC8E6C9) else Color(0xFFFFF9C4)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WordChip(text: String, bg: Color) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = bg
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.bodyMedium
+        )
     }
 }
 
