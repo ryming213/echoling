@@ -2,12 +2,12 @@
 
 > 一款面向国内英语学习者的 Android 原生应用，**完全离线运行**：本地 Vosk 语音识别 + 离线词典，无需任何 API key 或网络连接。
 
-[![Release v1.0](https://img.shields.io/badge/release-v1.0-7C3AED)](https://github.com/ryming213/Echo-Ling/releases/tag/v1.0)
+[![Release v1.0](https://img.shields.io/badge/release-v1.0-7C3AED)](https://github.com/ryming213/EchoLing/releases/tag/v1.0)
 [![Android](https://img.shields.io/badge/Android-26%2B-3DDC84)](#-开发环境)
 [![Kotlin](https://img.shields.io/badge/100%25-Kotlin-7F52FF)](#-技术栈)
 [![License](https://img.shields.io/badge/license-MIT-blue)](#-license)
 
-[📥 **下载 v1.0 APK (84.8 MB)**](https://github.com/ryming213/Echo-Ling/releases/download/v1.0/app-release.apk) · [🐛 反馈问题](https://github.com/ryming213/echoling/issues)
+[📥 **下载 v1.0 APK (84.8 MB)**](https://github.com/ryming213/EchoLing/releases/download/v1.0/app-release.apk) · [🐛 反馈问题](https://github.com/ryming213/echoling/issues)
 
 ---
 
