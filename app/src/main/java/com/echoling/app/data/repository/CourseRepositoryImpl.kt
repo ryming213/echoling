@@ -33,6 +33,31 @@ class CourseRepositoryImpl @Inject constructor(
         courseDao.deleteCourseById(courseId)
     }
 
+    override suspend fun markTranscriptionStarted(courseId: String) {
+        courseDao.markTranscriptionStarted(courseId)
+    }
+
+    override suspend fun markTranscriptionCompleted(
+        courseId: String,
+        srtPath: String,
+        totalSentences: Int,
+    ) {
+        courseDao.markTranscriptionCompleted(
+            courseId = courseId,
+            srtPath = srtPath,
+            totalSentences = totalSentences,
+            updatedAt = System.currentTimeMillis(),
+        )
+    }
+
+    override suspend fun markTranscriptionFailed(courseId: String, errorMessage: String) {
+        courseDao.markTranscriptionFailed(courseId, errorMessage)
+    }
+
+    override suspend fun updateTranscriptionProgress(courseId: String, progress: Int) {
+        courseDao.updateAutoSubtitleProgress(courseId, progress)
+    }
+
     private fun CourseEntity.toDomain(): Course = Course(
         courseId = courseId,
         courseName = courseName,
