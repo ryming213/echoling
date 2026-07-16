@@ -115,20 +115,18 @@ class AutoTranscriptionWorker @AssistedInject constructor(
                 throttleProgress(courseId, 95)
             }
 
-            // Final 100% — always publish, never throttled (terminal
-            // state). We deliberately do NOT runCatching this block:
-            // a Room failure mid-terminal would downgrade a successful
-            // pipeline to FAILED via the outer runCatching, but the
-            // race window (markTranscriptionCompleted already wrote
-            // READY, then updateTranscriptionProgress(100) throws) is
-            // tiny and recoverable on next re-enqueue.
+            // Final 100% publish — best-effort. markTranscriptionCompleted
+            // already wrote READY (source of truth). If we got here, work is
+            // done. Any failure in this terminal block (Room, fs) is caught
+            // by the outer runCatching and would downgrade READY to FAILED —
+            // that's a recoverable race; the next re-enqueue writes READY
+            // again. We intentionally return Result.success() so WorkManager
+            // observes SUCCEEDED regardless of cancellation state: the chip
+            // shows READY because the work IS complete, not because we're
+            // ignoring errors.
             setProgress(workDataOf(KEY_PROGRESS to 100, KEY_COURSE_ID to courseId))
             courseRepo.updateTranscriptionProgress(courseId, 100)
             cleanupTempWav(courseId)
-            // Honour user cancellation during the terminal block —
-            // throws CancellationException out of doWork so WorkManager
-            // sees the correct CANCELLED state instead of SUCCEEDED.
-            if (isStopped) throw CancellationException("Worker stopped by WorkManager")
             Result.success()
         }.getOrElse { e ->
             Log.e(TAG, "auto-transcription failed for $courseId", e)
