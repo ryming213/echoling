@@ -190,6 +190,27 @@ dependencies {
     }
     implementation("net.java.dev.jna:jna:5.18.1")
 
+    // (2026-07-16) ffmpeg-kit AAR vendored locally because Maven Central
+    // dropped the com.arthenica group after ffmpeg-kit was retired in
+    // early 2025. The .aar file is committed to app/libs/ (~35 MB — the
+    // min-gpl flavor ships 10 native libs: libavcodec, libavdevice,
+    // libavfilter, libavformat, libavutil, libswresample, libswscale,
+    // libffmpegkit, libffmpegkit_abidetect, libc++_shared × 4 ABIs) and
+    // referenced via files(...) — no POM metadata, but the AAR is
+    // self-contained (no transitive Maven deps). Native .so files are
+    // 16 KB-aligned by the existing patchNativeLibsFor16KB hook
+    // (CLAUDE.md §12.33).
+    implementation(files("libs/ffmpeg-kit-min-gpl-6.0-2.aar"))
+
+    // WorkManager 2.9.1 — required for AutoTranscriptionWorker (spec §6).
+    // HiltWorkerFactory wiring is done in EchoLingApplication.kt (Task 4).
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
+
+    // Hilt-Work integration (provides @HiltWorker + HiltWorkerFactory).
+    // ksp processor is already on classpath via the Hilt plugin.
+    implementation("androidx.hilt:hilt-work:1.1.0")
+    ksp("androidx.hilt:hilt-compiler:1.1.0")
+
     // Testing
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
