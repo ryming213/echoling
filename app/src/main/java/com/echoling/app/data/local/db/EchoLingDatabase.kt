@@ -27,6 +27,12 @@ import com.echoling.app.data.local.db.entity.WordEntity
  *    death, app cold-starts, and tab switches — without this the
  *    user re-enters each category from card 0 every time. The new
  *    table is empty on first install (no data to migrate).
+ *  - v5 → v6: added three auto-subtitle columns to `courses`
+ *    ([CourseEntity.autoSubtitleStatus], [CourseEntity.autoSubtitleErrorMessage],
+ *    [CourseEntity.autoSubtitleProgress]) so the on-device Vosk + ffmpeg
+ *    transcription worker can track PENDING / IN_PROGRESS / READY /
+ *    FAILED state per course. Old rows backfill to (NULL, NULL, 0) via
+ *    `MIGRATION_5_6` — the canonical "user provided a subtitle" sentinel.
  */
 @Database(
     entities = [
@@ -36,7 +42,7 @@ import com.echoling.app.data.local.db.entity.WordEntity
         WordEntity::class,
         ReciteProgressEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class EchoLingDatabase : RoomDatabase() {

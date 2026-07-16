@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import com.echoling.app.data.local.db.EchoLingDatabase
 import com.echoling.app.data.local.db.MIGRATION_2_3
+import com.echoling.app.data.local.db.MIGRATION_5_6
 import com.echoling.app.data.local.db.dao.CourseDao
 import com.echoling.app.data.local.db.dao.LearningProgressDao
 import com.echoling.app.data.local.db.dao.ReciteProgressDao
@@ -29,9 +30,10 @@ object DatabaseModule {
             "echo_ling_database"
         )
             // v2 → v3 introduces the `courses.courseName` column for the
-            // grouped (folder-style) Courses tab. `fallbackToDestructive`
+            // grouped (folder-style) Courses tab. v5 → v6 adds the three
+            // auto-subtitle columns on `courses`. `fallbackToDestructive`
             // is kept as a safety net for any future schema drift.
-            .addMigrations(MIGRATION_2_3)
+            .addMigrations(MIGRATION_2_3, MIGRATION_5_6)
             .fallbackToDestructiveMigration()
             .build()
     }

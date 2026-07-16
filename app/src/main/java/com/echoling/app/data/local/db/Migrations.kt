@@ -20,3 +20,20 @@ val MIGRATION_2_3: Migration = object : Migration(2, 3) {
         )
     }
 }
+
+/**
+ * v5 → v6: add three auto-subtitle columns to `courses` (spec §5.1).
+ *
+ *   autoSubtitleStatus        TEXT NULL
+ *   autoSubtitleErrorMessage  TEXT NULL
+ *   autoSubtitleProgress      INTEGER NOT NULL DEFAULT 0
+ *
+ * Pure additions, no data movement. Old rows backfill to (NULL, NULL, 0).
+ */
+val MIGRATION_5_6: Migration = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE courses ADD COLUMN autoSubtitleStatus TEXT NULL")
+        db.execSQL("ALTER TABLE courses ADD COLUMN autoSubtitleErrorMessage TEXT NULL")
+        db.execSQL("ALTER TABLE courses ADD COLUMN autoSubtitleProgress INTEGER NOT NULL DEFAULT 0")
+    }
+}
