@@ -115,6 +115,39 @@ class VoskSpeechRecognizer @Inject constructor(
         }
     }
 
+    /**
+     * (2026-07-15) Transcribe a WAV file and return a timed segment
+     * list, ready for SRT synthesis. Used by the auto-subtitle
+     * worker (spec §6.2). Differs from [transcribeFile] /
+     * [transcribeFileAlternatives] in two ways:
+     *
+     *   1. Always calls `setWords(true)` so each segment's
+     *      partial / final JSON carries per-word `start` / `end`
+     *      timestamps — without this, Vosk returns only
+     *      `{"text": "..."}` and we have no way to derive cue
+     *      boundaries.
+     *   2. Calls `setMaxAlternatives(1)` — we don't need n-best
+     *      for SRT synthesis (the synthesized text is what it is;
+     *      the user's reading speed decides whether the cue is
+     *      long enough, not Vosk's confidence).
+     *
+     * Returns a [Result] wrapping a list of [com.echoling.app.transcription.VoskSegment].
+     * On failure the throwable is wrapped via [Result.failure] (same
+     * convention as [transcribeFile]).
+     */
+    suspend fun transcribeFileWithSegments(
+        wavPath: String,
+    ): Result<List<com.echoling.app.transcription.VoskSegment>> = withContext(Dispatchers.IO) {
+        try {
+            val model = getOrLoadModel().getOrElse { return@withContext Result.failure(it) }
+            val segments = transcribeToSegments(model, wavPath)
+            Result.success(segments)
+        } catch (e: Throwable) {
+            Log.e(TAG, "transcribeFileWithSegments failed", e)
+            Result.failure(e)
+        }
+    }
+
     private fun getOrLoadModel(): Result<Model> {
         cachedModel?.let { return Result.success(it) }
         synchronized(modelLock) {
@@ -296,6 +329,88 @@ class VoskSpeechRecognizer @Inject constructor(
             try { cachedModel?.close() } catch (_: Throwable) {}
             cachedModel = null
         }
+    }
+
+    /**
+     * Internal worker for [transcribeFileWithSegments]. Always uses
+     * `setWords(true)`. Walks the partial/final result JSON the
+     * same way [transcribeWithAlternatives] does (accumulate
+     * committed segments, then append the final un-committed
+     * segment at EOF).
+     */
+    private fun transcribeToSegments(
+        model: Model,
+        wavPath: String,
+    ): List<com.echoling.app.transcription.VoskSegment> {
+        val sampleRate = 16_000f
+        val recognizer = Recognizer(model, sampleRate).apply {
+            setWords(true)
+            setMaxAlternatives(1)
+        }
+        val segments = ArrayList<com.echoling.app.transcription.VoskSegment>()
+        try {
+            FileInputStream(wavPath).use { fis ->
+                // Skip 44-byte RIFF header (Vosk's recognizer reads
+                // raw PCM, not WAV). The format is guaranteed by
+                // FfmpegAudioExtractor: PCM 16-bit mono 16 kHz.
+                val header = ByteArray(44)
+                val headerRead = fis.read(header)
+                require(headerRead == 44) { "WAV file too short: $wavPath" }
+
+                val chunk = ByteArray(8 * 1024)
+                while (true) {
+                    val n = fis.read(chunk)
+                    if (n <= 0) break
+                    val shortLen = n / 2
+                    val shorts = ShortArray(shortLen)
+                    val bb = java.nio.ByteBuffer.wrap(chunk, 0, n)
+                        .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                    for (i in 0 until shortLen) shorts[i] = bb.short
+                    if (recognizer.acceptWaveForm(shorts, shortLen)) {
+                        appendSegmentFromResult(recognizer, segments)
+                    }
+                }
+            }
+            // Final un-committed segment.
+            appendSegmentFromResult(recognizer, segments, final = true)
+        } finally {
+            try { recognizer.close() } catch (_: Throwable) {}
+        }
+        return segments
+    }
+
+    /**
+     * Extract one [com.echoling.app.transcription.VoskSegment] from a
+     * recognizer partial or final result JSON. `final = true` reads
+     * `recognizer.finalResult`; the default reads `recognizer.result`
+     * (the most recent partial). Skips empty-text results.
+     *
+     * Uses the first word's start and the last word's end as the
+     * segment boundaries (Vosk returns per-word timestamps when
+     * `setWords(true)` was called).
+     */
+    private fun appendSegmentFromResult(
+        recognizer: Recognizer,
+        out: MutableList<com.echoling.app.transcription.VoskSegment>,
+        final: Boolean = false,
+    ) {
+        val json = if (final) recognizer.finalResult else recognizer.result
+        val obj = JSONObject(json)
+        val text = obj.optString("text", "").trim()
+        if (text.isEmpty()) return
+        val words = obj.optJSONArray("result") ?: return
+        if (words.length() == 0) return
+        val first = words.getJSONObject(0)
+        val last = words.getJSONObject(words.length() - 1)
+        val startSec = first.optDouble("start", 0.0)
+        val endSec = last.optDouble("end", 0.0)
+        out.add(
+            com.echoling.app.transcription.VoskSegment(
+                startMs = (startSec * 1000).toLong(),
+                endMs = (endSec * 1000).toLong(),
+                text = text,
+            )
+        )
     }
 
     private companion object {
