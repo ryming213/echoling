@@ -2,12 +2,30 @@ package com.echoling.app
 
 import android.app.Application
 import android.util.Log
+import androidx.hilt.work.HiltWorkerFactory
+import androidx.work.Configuration
 import dagger.hilt.android.HiltAndroidApp
+import javax.inject.Inject
 
 @HiltAndroidApp
-class EchoLingApplication : Application() {
+class EchoLingApplication : Application(), Configuration.Provider {
+
+    // (2026-07-16) Inject HiltWorkerFactory so WorkManager can
+    // construct @HiltWorker classes (AutoTranscriptionWorker).
+    // The Configuration.Provider interface below lets WorkManager
+    // discover this factory instead of falling back to the default
+    // ReflectiveWorkerFactory — which can't see @AssistedInject
+    // constructors and would throw at first .enqueue().
+    @Inject lateinit var workerFactory: HiltWorkerFactory
+
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder()
+            .setWorkerFactory(workerFactory)
+            .build()
+
     override fun onCreate() {
         super.onCreate()
+
         // JNA dispatch library probe.
         //
         // Background: vosk-android:0.3.45 depends transitively on

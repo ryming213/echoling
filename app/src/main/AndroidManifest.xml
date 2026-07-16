@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
 
     <!-- (2026-07-04) INTERNET + ACCESS_NETWORK_STATE removed.
          The app is fully offline: the Vosk STT model is bundled
@@ -53,6 +54,26 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.EchoLing">
+        <!--
+            (2026-07-16) Disable WorkManager's default initialization
+            so our HiltWorkerFactory (in EchoLingApplication.kt) is
+            used instead of the default ReflectiveWorkerFactory.
+            Without this, the first .enqueue() of AutoTranscriptionWorker
+            throws IllegalStateException: "Attempting to instantiate
+            a worker that is not a default worker class" because
+            @HiltWorker requires HiltWorkerFactory to construct the
+            @AssistedInject parameters.
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
         <activity
             android:name=".presentation.MainActivity"
             android:exported="true"
