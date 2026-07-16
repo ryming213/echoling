@@ -56,10 +56,10 @@ class AutoTranscriptionScheduler @Inject constructor(
                     .build()
             )
             .addTag(WORK_TAG_GLOBAL)
-            .addTag("$WORK_TAG_PREFIX-$courseId")
+            .addTag("$WORK_NAME_PREFIX-$courseId")
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
-            "$WORK_TAG_PREFIX-$courseId",
+            "$WORK_NAME_PREFIX-$courseId",
             ExistingWorkPolicy.REPLACE,
             request,
         )
@@ -73,11 +73,25 @@ class AutoTranscriptionScheduler @Inject constructor(
      */
     fun observeWorkInfo(courseId: String): Flow<List<WorkInfo>> =
         WorkManager.getInstance(context)
-            .getWorkInfosByTagFlow("$WORK_TAG_PREFIX-$courseId")
+            .getWorkInfosByTagFlow("$WORK_NAME_PREFIX-$courseId")
             .map { infos -> infos.filter { it.state != WorkInfo.State.CANCELLED } }
 
     companion object {
+        /**
+         * Global WorkManager tag attached to every auto-subtitle work
+         * item. Used by UI / debug tooling to list all auto-subtitle
+         * jobs across the app, independent of which course they
+         * belong to.
+         */
         const val WORK_TAG_GLOBAL = "auto-subtitle"
-        const val WORK_TAG_PREFIX = "auto-subtitle"
+
+        /**
+         * Prefix used to derive the per-course unique work name and
+         * tag (`auto-subtitle-<courseId>`). Kept distinct from
+         * [WORK_TAG_GLOBAL] even though both currently share the
+         * string value `"auto-subtitle"` — renaming one in the
+         * future shouldn't silently affect the other.
+         */
+        const val WORK_NAME_PREFIX = "auto-subtitle"
     }
 }

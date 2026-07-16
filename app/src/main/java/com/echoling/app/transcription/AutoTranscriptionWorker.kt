@@ -53,6 +53,11 @@ class AutoTranscriptionWorker @AssistedInject constructor(
 
         val existing = courseRepo.getCourseById(courseId)
         val startProgress = existing?.autoSubtitleProgress ?: 0
+        // Hoist wavPath so step 2 (delete check + Vosk) and step 3
+        // (resume re-run) reference the same path. Two computations
+        // here would silently diverge if wavFileFor(...) ever gains
+        // per-invocation suffix logic.
+        val wavPath = wavFileFor(courseId).absolutePath
 
         return runCatching {
             // segments is held in memory so step 3 can reuse them
@@ -62,67 +67,104 @@ class AutoTranscriptionWorker @AssistedInject constructor(
             if (startProgress < 30) {
                 courseRepo.markTranscriptionStarted(courseId)
                 ffmpeg.extractMono16kWav(mediaPath, courseId).getOrThrow()
-                throttleProgress(courseId, 0, 30)
+                throttleProgress(courseId, 30)
             }
 
             if (startProgress < 70) {
-                val wavPath = wavFileFor(courseId).absolutePath
                 if (!File(wavPath).exists()) {
                     // Process death + cacheDir GC — redo step 1.
                     ffmpeg.extractMono16kWav(mediaPath, courseId).getOrThrow()
-                    throttleProgress(courseId, 0, 30)
+                    throttleProgress(courseId, 30)
                 }
                 segments = vosk.transcribeFileWithSegments(wavPath).getOrThrow()
                 if (segments.isEmpty()) {
                     throw IllegalStateException("未识别到任何语音")
                 }
-                throttleProgress(courseId, 30, 70)
+                throttleProgress(courseId, 70)
             }
 
             if (startProgress < 95) {
                 // Reuse segments from step 2 if available; otherwise
                 // re-run Vosk (only happens when resuming from 70-95%
                 // after process death — segments are not persisted).
-                val wavPath = wavFileFor(courseId).absolutePath
                 val resolvedSegments = segments
                     ?: vosk.transcribeFileWithSegments(wavPath).getOrThrow()
+                if (resolvedSegments.isEmpty()) {
+                    // Resume path: Vosk re-run after process death
+                    // may return empty (e.g. corrupted WAV surviving
+                    // cacheDir GC). Without this guard, an empty SRT
+                    // would be written and the course marked READY
+                    // with totalSentences=0 — a hidden "ready but
+                    // broken" state.
+                    throw IllegalStateException("未识别到任何语音")
+                }
                 val srtText = SrtSynthesizer.toSrt(resolvedSegments)
                 val srtFile = File(applicationContext.filesDir, "courses/$courseId.srt")
                 srtFile.parentFile?.mkdirs()
                 srtFile.writeText(srtText)
-                val totalSentences = srtText.split("\n\n").size - 1
+                // SrtSynthesizer produces N cues with N-1 "\n\n"
+                // separators (last cue has trailing "\n" only).
+                // count { isNotBlank } correctly reports N: empty=""
+                // -> 0; 1 cue -> 1; 2 cues -> 2.
+                val totalSentences = srtText.split("\n\n").count { it.isNotBlank() }
                 courseRepo.markTranscriptionCompleted(
                     courseId = courseId,
                     srtPath = srtFile.absolutePath,
                     totalSentences = totalSentences.coerceAtLeast(0),
                 )
-                throttleProgress(courseId, 70, 95)
+                throttleProgress(courseId, 95)
             }
 
-            // Final 100% — always publish, never throttled (terminal state).
+            // Final 100% — always publish, never throttled (terminal
+            // state). We deliberately do NOT runCatching this block:
+            // a Room failure mid-terminal would downgrade a successful
+            // pipeline to FAILED via the outer runCatching, but the
+            // race window (markTranscriptionCompleted already wrote
+            // READY, then updateTranscriptionProgress(100) throws) is
+            // tiny and recoverable on next re-enqueue.
             setProgress(workDataOf(KEY_PROGRESS to 100, KEY_COURSE_ID to courseId))
             courseRepo.updateTranscriptionProgress(courseId, 100)
             cleanupTempWav(courseId)
+            // Honour user cancellation during the terminal block —
+            // throws CancellationException out of doWork so WorkManager
+            // sees the correct CANCELLED state instead of SUCCEEDED.
+            if (isStopped) throw CancellationException("Worker stopped by WorkManager")
             Result.success()
         }.getOrElse { e ->
             Log.e(TAG, "auto-transcription failed for $courseId", e)
-            courseRepo.markTranscriptionFailed(courseId, e.message ?: "未知错误")
-            cleanupTempWav(courseId)
+            // Wrap the failure-path side effects: if Room throws
+            // inside markTranscriptionFailed (e.g. disk full), the
+            // exception would otherwise escape doWork, leaving the DB
+            // in prior IN_PROGRESS status — chip-render contract
+            // (autoSubtitleStatus = FAILED ↔ WorkInfo.State.FAILED)
+            // breaks and the next scheduler enqueue reads stale
+            // startProgress. The original exception's message still
+            // propagates as Result.failure (primary error preserved).
+            runCatching {
+                courseRepo.markTranscriptionFailed(courseId, e.message ?: "未知错误")
+                cleanupTempWav(courseId)
+            }.onFailure { nested ->
+                Log.e(TAG, "secondary failure in cleanup for $courseId (primary error preserved)", nested)
+            }
             Result.failure(workDataOf("error" to e.message))
         }
     }
 
     private var lastPublishAtMs = 0L
 
-    private suspend fun throttleProgress(courseId: String, from: Int, to: Int) {
+    private suspend fun throttleProgress(courseId: String, to: Int) {
+        // Check isStopped BEFORE publishing — otherwise a cancelled
+        // worker still emits one stale progress update (with the `to`
+        // value) right before throwing, causing the chip to flicker
+        // once before CANCELLED.
+        if (isStopped) {
+            throw CancellationException("Worker stopped by WorkManager")
+        }
         val now = System.currentTimeMillis()
         if (now - lastPublishAtMs >= 1_000) {
             setProgress(workDataOf(KEY_PROGRESS to to, KEY_COURSE_ID to courseId))
             courseRepo.updateTranscriptionProgress(courseId, to)
             lastPublishAtMs = now
-        }
-        if (isStopped) {
-            throw CancellationException("Worker stopped by WorkManager")
         }
     }
 
