@@ -26,7 +26,12 @@ data class Course(
     val totalSentences: Int,
     val thumbnailUri: String?,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    // (2026-07-15) Auto-subtitle state (spec §5.1). Enum at domain,
+    // string at entity — round-trip handled by AutoSubtitleStatus.
+    val autoSubtitleStatus: AutoSubtitleStatus? = null,
+    val autoSubtitleErrorMessage: String? = null,
+    val autoSubtitleProgress: Int = 0,
 ) {
     fun hasVideoContent(): Boolean = !videoUri.isNullOrBlank()
     fun hasAudioContent(): Boolean = !audioUri.isNullOrBlank()

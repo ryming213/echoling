@@ -2,6 +2,7 @@ package com.echoling.app.data.repository
 
 import com.echoling.app.data.local.db.dao.CourseDao
 import com.echoling.app.data.local.db.entity.CourseEntity
+import com.echoling.app.domain.model.AutoSubtitleStatus
 import com.echoling.app.domain.model.Course
 import com.echoling.app.domain.repository.CourseRepository
 import kotlinx.coroutines.flow.Flow
@@ -45,7 +46,10 @@ class CourseRepositoryImpl @Inject constructor(
         totalSentences = totalSentences,
         thumbnailUri = thumbnailUri,
         createdAt = createdAt,
-        updatedAt = updatedAt
+        updatedAt = updatedAt,
+        autoSubtitleStatus = AutoSubtitleStatus.fromDbString(autoSubtitleStatus),
+        autoSubtitleErrorMessage = autoSubtitleErrorMessage,
+        autoSubtitleProgress = autoSubtitleProgress,
     )
 
     private fun Course.toEntity(): CourseEntity = CourseEntity(
@@ -61,6 +65,9 @@ class CourseRepositoryImpl @Inject constructor(
         totalSentences = totalSentences,
         thumbnailUri = thumbnailUri,
         createdAt = createdAt,
-        updatedAt = updatedAt
+        updatedAt = updatedAt,
+        autoSubtitleStatus = autoSubtitleStatus?.dbValue,
+        autoSubtitleErrorMessage = autoSubtitleErrorMessage,
+        autoSubtitleProgress = autoSubtitleProgress,
     )
 }

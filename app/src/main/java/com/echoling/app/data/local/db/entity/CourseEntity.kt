@@ -25,5 +25,11 @@ data class CourseEntity(
     val totalSentences: Int,
     val thumbnailUri: String?,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    // (2026-07-15) Auto-subtitle state (spec §5.1, migration 5→6).
+    // autoSubtitleStatus uses AutoSubtitleStatus.dbValue; null = "user
+    // provided a subtitle, no auto-subtitle needed".
+    val autoSubtitleStatus: String? = null,
+    val autoSubtitleErrorMessage: String? = null,
+    val autoSubtitleProgress: Int = 0,
 )
