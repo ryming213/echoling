@@ -232,6 +232,7 @@ iOS 对应项目：[EchoLing-iOS](https://github.com/ryming213/EchoLing-iOS) （
 - **Vosk small 模型 WER ~10%**：小模型固有上限。如需更高识别率可换 `vosk-model-en-us-0.22-lgraph`（APK +92 MB）。
 - **Release 暂未启用 R8 混淆**（CLAUDE.md §9.3）：正式发布前需启用。
 - **数据库 destructive migration**：DB v5，升级会清空学习进度（v6 之前用 `fallbackToDestructiveMigration()` 兜底）。
+- **ffmpeg-kit-min-gpl（自动字幕生成）**: auto-subtitle pipeline uses the GPL flavor of ffmpeg-kit, which forces the entire APK to be GPL-licensed at distribution. To switch to LGPL, would lose DTS / FLAC / Opus support. AAR is vendored at `app/libs/ffmpeg-kit-min-gpl-6.0-2.aar` (~35 MB) because Arthenica withdrew Maven Central hosting in 2025.
 
 ---
 
