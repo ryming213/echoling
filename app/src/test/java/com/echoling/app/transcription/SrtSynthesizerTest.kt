@@ -130,4 +130,47 @@ class SrtSynthesizerTest {
         assertTrue(srt.contains("alpha bravo"))
         assertTrue(srt.contains("charlie delta"))
     }
+
+    @Test
+    fun `long duration split with few words does not crash when words run out`() {
+        // 5 words over 30 seconds: duration-driven split (pieceCount = 4)
+        // would normally try to slice words[6..5] — must not crash.
+        val text = "one two three four five"
+        val srt = SrtSynthesizer.toSrt(
+            listOf(VoskSegment(0, 30_000, text))
+        )
+        // Must produce a valid SRT (cue count <= 5 — no crash, no extra empty cues)
+        val cueCount = srt.lines().count { it.matches(Regex("^\\d+$")) }
+        assertTrue("expected >=1 cue, got $cueCount", cueCount >= 1)
+        assertTrue("expected <=5 cues, got $cueCount", cueCount <= 5)
+        // The text content must be present (in some form)
+        assertTrue("missing any of the words: $srt",
+            srt.contains("one") || srt.contains("five"))
+    }
+
+    @Test
+    fun `adjacent redistributed pieces overlap by OVERLAP_MS`() {
+        // 13 words over 8s → duration split, 2 cues
+        val text = (1..13).joinToString(" ") { "w$it" }
+        val srt = SrtSynthesizer.toSrt(
+            listOf(VoskSegment(0, 8000, text))
+        )
+        // Parse cues back out: each cue is "<index>\n<start> --> <end>\n<text>\n"
+        val cueTimes = Regex("""(\d{2}):(\d{2}):(\d{2}),(\d{3}) --> (\d{2}):(\d{2}):(\d{2}),(\d{3})""")
+            .findAll(srt)
+            .map { m ->
+                val (sH, sM, sS, sMs, eH, eM, eS, eMs) = m.destructured
+                val startMs = sH.toLong()*3_600_000 + sM.toLong()*60_000 + sS.toLong()*1_000 + sMs.toLong()
+                val endMs = eH.toLong()*3_600_000 + eM.toLong()*60_000 + eS.toLong()*1_000 + eMs.toLong()
+                startMs to endMs
+            }
+            .toList()
+        assertEquals("expected 2 cues, got: $srt", 2, cueTimes.size)
+        val (cue1Start, cue1End) = cueTimes[0]
+        val (cue2Start, cue2End) = cueTimes[1]
+        // Adjacent cues should overlap: cue1End > cue2Start
+        val overlap = cue1End - cue2Start
+        assertTrue("expected ~750ms overlap, got ${overlap}ms (cue1End=$cue1End, cue2Start=$cue2Start)",
+            overlap in 700L..800L)
+    }
 }

@@ -47,11 +47,11 @@ object SrtSynthesizer {
     private const val MAX_SEGMENT_WORDS = 12
 
     /**
-     * Overlap between adjacent redistributed cues, in ms. The new
-     * cue's start time is set to (previous cue's end - OVERLAP_MS)
-     * to avoid a perceptible gap when the speaker talks fast and
-     * the redistribution pushes the second cue's start slightly
-     * earlier than the first cue's end would have allowed.
+     * Overlap between adjacent redistributed cues, in ms. The previous
+     * cue's end is pushed forward by [OVERLAP_MS] past the next cue's
+     * natural start, producing 750ms of visual overlap so the user
+     * doesn't see a gap when fast speech makes the redistribution
+     * push the second cue's start slightly later than expected.
      */
     private const val OVERLAP_MS = 750L
 
@@ -141,6 +141,12 @@ object SrtSynthesizer {
         val pieces = ArrayList<RedistributedPiece>(pieceCount)
         for (i in 0 until pieceCount) {
             val from = i * perPiece
+            // Guard BEFORE subList: when pieceCount is driven by duration
+            // (not words), `from` can exceed words.size (e.g. 5 words over
+            // 30s → pieceCount=4, perPiece=2, at i=3 from=6 > 5). subList(6, 5)
+            // would throw IllegalArgumentException. break (not continue)
+            // because subsequent i values only produce larger `from`.
+            if (from >= words.size) break
             val to = minOf(from + perPiece, words.size)
             val pieceWords = words.subList(from, to)
             if (pieceWords.isEmpty()) continue

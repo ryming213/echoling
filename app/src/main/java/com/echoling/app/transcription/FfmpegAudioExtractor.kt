@@ -62,8 +62,21 @@ class FfmpegAudioExtractor @Inject constructor(
             val outFile = File(context.cacheDir, "auto_subtitle/$courseId.wav")
             outFile.parentFile?.mkdirs()
 
-            val session = FFmpegKit.execute(
-                "-y -i \"$inputPath\" -vn -ac 1 -ar 16000 -f wav \"${outFile.absolutePath}\""
+            // Use executeWithArguments (the documented tokenized form)
+            // instead of execute(String): the String form re-tokenizes the
+            // command via shell-style quoting and breaks on paths containing
+            // spaces or quote characters. Passing an explicit argument array
+            // bypasses tokenization entirely, so any path content is safe.
+            val session = FFmpegKit.executeWithArguments(
+                arrayOf(
+                    "-y",
+                    "-i", inputPath,
+                    "-vn",
+                    "-ac", "1",
+                    "-ar", "16000",
+                    "-f", "wav",
+                    outFile.absolutePath,
+                )
             )
             val returnCode = session.returnCode
             check(returnCode.isValueSuccess) {
