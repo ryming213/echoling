@@ -10,6 +10,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -17,7 +18,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.ui.PlayerView
 import androidx.media3.exoplayer.ExoPlayer
+import com.echoling.app.R
+import com.echoling.app.domain.model.AutoSubtitleStatus
 import com.echoling.app.presentation.ui.navigation.SUB_PAGE_NAV_ANIM_MS
+import com.echoling.app.presentation.viewmodel.LoadSubtitleState
 import com.echoling.app.presentation.viewmodel.PracticeViewModel
 import com.echoling.app.presentation.viewmodel.WordTranslationState
 import kotlinx.coroutines.delay
@@ -30,6 +34,10 @@ fun PracticeScreen(
     viewModel: PracticeViewModel = hiltViewModel()
 ) {
     val currentPage by viewModel.currentPage.collectAsState()
+    // (2026-07-16) Subtitle-readiness state. When this is NotReady,
+    // we render a centered hourglass + back button instead of the
+    // normal per-page practice UI.
+    val subtitleLoadState by viewModel.subtitleLoadState.collectAsState()
 
     // Initialize on first composition
     LaunchedEffect(courseId) {
@@ -205,19 +213,34 @@ fun PracticeScreen(
 
             // Page content
             Box(modifier = Modifier.weight(1f)) {
-                when (currentPage) {
-                    PracticeViewModel.PracticePage.LISTENING -> ListeningPage(
-                        viewModel = viewModel,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    PracticeViewModel.PracticePage.SPEAKING -> SpeakingPage(
-                        viewModel = viewModel,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    PracticeViewModel.PracticePage.TESTING -> TestingPage(
-                        viewModel = viewModel,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                // (2026-07-16) Take over the page body with the
+                // "字幕正在识别中" view when the auto-subtitle job is
+                // still running. The TabRow + back button remain
+                // visible so the user can navigate away.
+                when (val subtitleState = subtitleLoadState) {
+                    is LoadSubtitleState.NotReady -> {
+                        SubtitleNotReadyView(
+                            courseName = subtitleState.courseName,
+                            status = subtitleState.status,
+                            onBack = onNavigateBack,
+                        )
+                    }
+                    else -> {
+                        when (currentPage) {
+                            PracticeViewModel.PracticePage.LISTENING -> ListeningPage(
+                                viewModel = viewModel,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            PracticeViewModel.PracticePage.SPEAKING -> SpeakingPage(
+                                viewModel = viewModel,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            PracticeViewModel.PracticePage.TESTING -> TestingPage(
+                                viewModel = viewModel,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
                 }
             }
 
@@ -585,4 +608,65 @@ internal fun WordSaveDialog(
         },
         shape = RoundedCornerShape(24.dp)
     )
+}
+
+/**
+ * (2026-07-16) Empty-subtitle state for PracticeScreen. Shown when
+ * the user opens a course whose auto-subtitle job is still running
+ * (PENDING / IN_PROGRESS). Distinguishes "字幕正在识别中" from a
+ * generic LoadError — the user knows the app is working on it and
+ * can come back.
+ *
+ * Composition:
+ *  - 48dp tertiary HourglassEmpty icon (signals "in progress")
+ *  - titleMedium "字幕正在识别中… 请稍后回来" (auto_subtitle_practice_empty)
+ *  - bodyMedium "「<courseName>」" (gray subtitle identifying the course)
+ *  - Primary button "返回课程列表" → onBack (auto_subtitle_practice_back)
+ *
+ * The course-name text is composed in the composable (rather than
+ * templated through strings.xml) because the dynamic value comes
+ * from a runtime property — Compose convention for one-line uses
+ * is to interpolate directly.
+ */
+@Composable
+private fun SubtitleNotReadyView(
+    courseName: String,
+    status: AutoSubtitleStatus,
+    onBack: () -> Unit,
+) {
+    // `status` is plumbed through for completeness; today both
+    // PENDING and IN_PROGRESS render the same view. Future progress
+    // could switch on it to show a percent or a step label.
+    @Suppress("UNUSED_PARAMETER") val _ignored = status
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.HourglassEmpty,
+            contentDescription = null,
+            modifier = Modifier.size(48.dp),
+            tint = MaterialTheme.colorScheme.tertiary,
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = stringResource(R.string.auto_subtitle_practice_empty),
+            style = MaterialTheme.typography.titleMedium,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "「$courseName」",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        Button(onClick = onBack) {
+            Text(stringResource(R.string.auto_subtitle_practice_back))
+        }
+    }
 }

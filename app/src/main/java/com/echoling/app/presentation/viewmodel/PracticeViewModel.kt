@@ -8,10 +8,12 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import com.echoling.app.domain.model.AutoSubtitleStatus
 import com.echoling.app.domain.model.Course
 import com.echoling.app.domain.model.LearningProgress
 import com.echoling.app.domain.model.Sentence
 import com.echoling.app.domain.model.Word
+import com.echoling.app.domain.repository.CourseRepository
 import com.echoling.app.domain.usecase.GetCourseDetailUseCase
 import com.echoling.app.domain.usecase.GetCourseSentencesUseCase
 import com.echoling.app.domain.usecase.LookupWordUseCase
@@ -46,6 +48,31 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
+
+/**
+ * (2026-07-16) Outcome of resolving "can we load subtitles for this
+ * course right now?". Used by [PracticeViewModel.loadSubtitles] /
+ * [PracticeViewModel.resolveSubtitleState] to distinguish three
+ * different UX outcomes:
+ *
+ *  - [Ready] — subtitle file exists on disk; parse it and enter the
+ *    normal practice flow.
+ *  - [NotReady] — auto-subtitle is still running (PENDING / IN_PROGRESS).
+ *    Practice should show the hourglass / "字幕正在识别中" view.
+ *  - [LoadError] — course is in a terminal state (READY without a
+ *    subtitle file, FAILED, or null) but there's nothing to load.
+ *    Surface a generic error.
+ *
+ * Kept at file top-level (not inside PracticeViewModel) so it can be
+ * referenced from private helpers without an inner-class clutter, and
+ * so future tests can construct these states without instantiating the
+ * full VM.
+ */
+sealed class LoadSubtitleState {
+    data class Ready(val path: String) : LoadSubtitleState()
+    data class NotReady(val courseName: String, val status: AutoSubtitleStatus) : LoadSubtitleState()
+    data class LoadError(val reason: String) : LoadSubtitleState()
+}
 
 data class SentenceState(
     val sentenceId: Int,
@@ -132,6 +159,11 @@ class PracticeViewModel @Inject constructor(
     private val wavRecorder: WavRecorder,
     private val voskRecognizer: VoskSpeechRecognizer,
     private val modelManager: ModelManager,
+    // (2026-07-16) Auto-subtitle readiness check (spec §5.6). Used by
+    // [resolveSubtitleState] to distinguish "subtitle is being
+    // generated" (NotReady → show hourglass view) from "no subtitle
+    // file at all" (LoadError → generic error).
+    private val courseRepository: CourseRepository,
 ) : AndroidViewModel(application) {
 
     val playbackState = audioPlayer.playbackState
@@ -145,6 +177,21 @@ class PracticeViewModel @Inject constructor(
 
     private val _subtitles = MutableStateFlow<List<Subtitle>>(emptyList())
     val subtitles: StateFlow<List<Subtitle>> = _subtitles.asStateFlow()
+
+    /**
+     * (2026-07-16) Subtitle-readiness state for the current course.
+     * PracticeScreen reads this and dispatches to either
+     * [SubtitleNotReadyView] (hourglass + course name + back) or the
+     * normal per-page Listening / Speaking / Testing views.
+     *
+     * Defaults to [LoadSubtitleState.LoadError] (placeholder "not
+     * loaded yet"); gets set to its real value by [loadCourse] →
+     * [resolveSubtitleState] before the audio / video player is set up.
+     */
+    private val _subtitleLoadState = MutableStateFlow<LoadSubtitleState>(
+        LoadSubtitleState.LoadError("Not loaded yet"),
+    )
+    val subtitleLoadState: StateFlow<LoadSubtitleState> = _subtitleLoadState.asStateFlow()
 
     // Page switching state. Declared before [_subtitleIndexByPage] /
     // [currentSubtitleIndex] so the derived StateFlow below can
@@ -688,7 +735,43 @@ class PracticeViewModel @Inject constructor(
                 val course = detail.course
                 if (course == null) {
                     android.util.Log.e("PracticeViewModel", "Course not found: $courseId")
+                    _subtitleLoadState.value = LoadSubtitleState.LoadError("Course not found")
                     return@launch
+                }
+
+                // (2026-07-16) Resolve subtitle-readiness BEFORE
+                // setting up the audio/video player. If the auto-
+                // subtitle job is still running, PracticeScreen needs
+                // to render the SubtitleNotReadyView immediately —
+                // setting up ExoPlayer / AudioPlayer would just load
+                // an unusable subtitle-less UI that we'd then have to
+                // tear down. The Ready path also seeds the SRT file
+                // path so the loadSubtitles() call below uses the
+                // resolved (rather than passed-in) value.
+                when (val resolved = resolveSubtitleState(courseId)) {
+                    is LoadSubtitleState.NotReady -> {
+                        _subtitleLoadState.value = resolved
+                        android.util.Log.d("PracticeViewModel", "Subtitle not ready yet (status=${resolved.status}); showing empty state")
+                        // Still set up the audio player so the user
+                        // could theoretically listen without
+                        // subtitles. Pass null for subtitleUri so
+                        // loadMedia / loadVideo's internal subtitle
+                        // branch is skipped.
+                        if (course.hasVideoContent() && course.videoUri.isNullOrBlank().not()) {
+                            loadVideo(course.videoUri!!, null, courseId)
+                        } else if (course.hasAudioContent() && course.audioUri.isNullOrBlank().not()) {
+                            loadMedia(course.audioUri!!, null, courseId)
+                        }
+                        return@launch
+                    }
+                    is LoadSubtitleState.LoadError -> {
+                        _subtitleLoadState.value = resolved
+                        android.util.Log.w("PracticeViewModel", "Subtitle load error: ${resolved.reason}")
+                        return@launch
+                    }
+                    is LoadSubtitleState.Ready -> {
+                        _subtitleLoadState.value = resolved
+                    }
                 }
 
                 val savedProgress = detail.progress
@@ -830,6 +913,35 @@ class PracticeViewModel @Inject constructor(
         }
     }
 
+    /**
+     * (2026-07-16) Resolve the current course's subtitle-readiness
+     * state by looking up the row in the database. Returns:
+     *
+     *  - [LoadSubtitleState.Ready] if the course has a non-null
+     *    `subtitleUri` (user-provided or auto-generated SRT).
+     *  - [LoadSubtitleState.NotReady] if `subtitleUri` is null AND
+     *    the auto-subtitle job is still PENDING / IN_PROGRESS.
+     *  - [LoadSubtitleState.LoadError] otherwise (course not found,
+     *    no subtitle and status is terminal / null).
+     *
+     * Caller is responsible for the next step (parsing, surfacing
+     * error, etc.) — this method only classifies.
+     */
+    private suspend fun resolveSubtitleState(courseId: String): LoadSubtitleState {
+        val course = courseRepository.getCourseById(courseId)
+            ?: return LoadSubtitleState.LoadError("Course not found")
+        val status = course.autoSubtitleStatus
+        return when {
+            course.subtitleUri == null &&
+                (status == AutoSubtitleStatus.PENDING || status == AutoSubtitleStatus.IN_PROGRESS) ->
+                LoadSubtitleState.NotReady(course.title, status)
+            course.subtitleUri == null ->
+                LoadSubtitleState.LoadError("No subtitle file for this course")
+            else ->
+                LoadSubtitleState.Ready(course.subtitleUri)
+        }
+    }
+
     private fun loadSubtitles(uri: String) {
         viewModelScope.launch {
             try {
@@ -857,6 +969,10 @@ class PracticeViewModel @Inject constructor(
                     val parsed = subtitleParserFactory.parseSubtitles(content, fileName)
                     android.util.Log.d("PracticeViewModel", "Parsed ${parsed.size} subtitles")
                     _subtitles.value = parsed
+                    // (2026-07-16) Mark subtitle-load state Ready so
+                    // PracticeScreen stops showing the hourglass view
+                    // (Task 5.6) and enters the normal per-page flow.
+                    _subtitleLoadState.value = LoadSubtitleState.Ready(uri)
 
                     // (2026-07-10) §12.39: Auto-land on first sentence when a
                     // page's subtitle-index slot is still at -1 (initial
