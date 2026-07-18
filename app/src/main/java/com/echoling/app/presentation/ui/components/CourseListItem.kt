@@ -22,7 +22,9 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.Headphones
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.VideoFile
@@ -45,8 +47,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.echoling.app.R
+import com.echoling.app.domain.model.AutoSubtitleStatus
 import com.echoling.app.domain.model.Course
 
 /**
@@ -68,6 +73,7 @@ fun CourseListItem(
     onClick: () -> Unit,
     onDeleteClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onRetryTranscription: () -> Unit = {},
 ) {
     val hasAudio = course.hasAudioContent()
     val hasVideo = course.hasVideoContent()
@@ -86,6 +92,36 @@ fun CourseListItem(
 
     val accentColor = accentColorFor(course.difficulty)
 
+    // (2026-07-16) Auto-subtitle status chip. Surfaces the
+    // background-worker state to the course list so the user knows
+    // when a course is still being transcribed and can retry failed
+    // jobs without diving into a sub-page.
+    val autoStatus = course.autoSubtitleStatus
+    val chipData = when (autoStatus) {
+        AutoSubtitleStatus.PENDING -> ChipData(
+            label = stringResource(R.string.auto_subtitle_chip_pending),
+            icon = Icons.Filled.HourglassEmpty,
+            color = MaterialTheme.colorScheme.tertiary,
+            enabled = false,
+        )
+        AutoSubtitleStatus.IN_PROGRESS -> ChipData(
+            label = stringResource(
+                R.string.auto_subtitle_chip_in_progress,
+                course.autoSubtitleProgress,
+            ),
+            icon = Icons.Filled.HourglassEmpty,
+            color = MaterialTheme.colorScheme.tertiary,
+            enabled = false,
+        )
+        AutoSubtitleStatus.FAILED -> ChipData(
+            label = stringResource(R.string.auto_subtitle_chip_failed),
+            icon = Icons.Filled.Warning,
+            color = MaterialTheme.colorScheme.error,
+            enabled = true,
+        )
+        AutoSubtitleStatus.READY, null -> null
+    }
+
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -94,6 +130,15 @@ fun CourseListItem(
             .clickable(
                 interactionSource = interactionSource,
                 indication = rememberRipple(),
+                // (2026-07-16) Disable the card while auto-subtitle
+                // is still running — the user can't practice the
+                // course without subtitles, so tapping it would just
+                // land on a "字幕正在识别中" empty state (Task 5.6).
+                // FAILED is still clickable so the user can navigate
+                // to the sub-page and trigger retry there; READY/null
+                // are normal flow.
+                enabled = autoStatus != AutoSubtitleStatus.PENDING &&
+                        autoStatus != AutoSubtitleStatus.IN_PROGRESS,
                 onClick = onClick,
             ),
         shape = RoundedCornerShape(16.dp),
@@ -124,6 +169,29 @@ fun CourseListItem(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
+                    if (chipData != null) {
+                        AssistChip(
+                            // FAILED chip is clickable → retry.
+                            // PENDING / IN_PROGRESS chips are inert
+                            // (the worker is doing the work; tapping
+                            // would just enqueue a duplicate).
+                            onClick = { if (chipData.enabled) onRetryTranscription() },
+                            label = { Text(chipData.label) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = chipData.icon,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            },
+                            colors = AssistChipDefaults.assistChipColors(
+                                containerColor = chipData.color.copy(alpha = 0.15f),
+                                labelColor = chipData.color,
+                                leadingIconContentColor = chipData.color,
+                            ),
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                    }
                     Text(
                         text = course.title,
                         // titleMedium (16sp) → titleSmall (14sp): kept
@@ -258,3 +326,16 @@ private fun formatDuration(ms: Long): String {
     val seconds = totalSeconds % 60
     return "%d:%02d".format(minutes, seconds)
 }
+
+/**
+ * (2026-07-16) Per-state chip payload for the auto-subtitle status
+ * indicator. Pulled out of the `when` arm so the Compose layer can
+ * pass it into the chip without recomputing inside the composable
+ * tree.
+ */
+private data class ChipData(
+    val label: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val color: androidx.compose.ui.graphics.Color,
+    val enabled: Boolean,
+)
