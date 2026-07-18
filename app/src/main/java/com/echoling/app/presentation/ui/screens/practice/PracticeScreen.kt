@@ -19,7 +19,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.ui.PlayerView
 import androidx.media3.exoplayer.ExoPlayer
 import com.echoling.app.R
-import com.echoling.app.domain.model.AutoSubtitleStatus
 import com.echoling.app.presentation.ui.navigation.SUB_PAGE_NAV_ANIM_MS
 import com.echoling.app.presentation.viewmodel.LoadSubtitleState
 import com.echoling.app.presentation.viewmodel.PracticeViewModel
@@ -221,7 +220,6 @@ fun PracticeScreen(
                     is LoadSubtitleState.NotReady -> {
                         SubtitleNotReadyView(
                             courseName = subtitleState.courseName,
-                            status = subtitleState.status,
                             onBack = onNavigateBack,
                         )
                     }
@@ -631,14 +629,8 @@ internal fun WordSaveDialog(
 @Composable
 private fun SubtitleNotReadyView(
     courseName: String,
-    status: AutoSubtitleStatus,
     onBack: () -> Unit,
 ) {
-    // `status` is plumbed through for completeness; today both
-    // PENDING and IN_PROGRESS render the same view. Future progress
-    // could switch on it to show a percent or a step label.
-    @Suppress("UNUSED_PARAMETER") val _ignored = status
-
     Column(
         modifier = Modifier
             .fillMaxSize()

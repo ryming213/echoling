@@ -175,7 +175,11 @@ fun CourseListItem(
                             // PENDING / IN_PROGRESS chips are inert
                             // (the worker is doing the work; tapping
                             // would just enqueue a duplicate).
+                            // `enabled = false` also greys out the
+                            // chip so it visually reads as disabled,
+                            // not inert-but-clickable.
                             onClick = { if (chipData.enabled) onRetryTranscription() },
+                            enabled = chipData.enabled,
                             label = { Text(chipData.label) },
                             leadingIcon = {
                                 Icon(

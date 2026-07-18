@@ -115,7 +115,12 @@ class CourseDetailViewModel @Inject constructor(
             // Step 2: stale SRT. We don't fail the retry if this
             // throws — the worker will overwrite it on completion.
             runCatching {
-                File(course.subtitleUri).takeIf { it.exists() }?.delete()
+                // Explicit null-check on subtitleUri: for FAILED
+                // courses the field is usually null (no SRT was
+                // written), and `File(null)` would NPE. The wrapping
+                // runCatching would swallow it but using NPE as
+                // control-flow is brittle.
+                course.subtitleUri?.let { File(it).takeIf { f -> f.exists() }?.delete() }
             }
             // Step 3 + 4: reset columns then enqueue.
             courseRepository.markTranscriptionStarted(courseId)

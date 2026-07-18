@@ -189,7 +189,14 @@ class PracticeViewModel @Inject constructor(
      * [resolveSubtitleState] before the audio / video player is set up.
      */
     private val _subtitleLoadState = MutableStateFlow<LoadSubtitleState>(
-        LoadSubtitleState.LoadError("Not loaded yet"),
+        // Defaults to Ready("") (empty path) instead of LoadError so
+        // the per-page render during the ~350ms SUB_PAGE_NAV_ANIM_MS
+        // delay before loadCourse() runs doesn't fall through to the
+        // empty/broken ListeningPage UI. Empty path is treated as
+        // "no subtitles yet" by loadSubtitles/loadSubtitlesPath;
+        // loadCourse() will overwrite this with the real Ready(path)
+        // once it finishes.
+        LoadSubtitleState.Ready(""),
     )
     val subtitleLoadState: StateFlow<LoadSubtitleState> = _subtitleLoadState.asStateFlow()
 
