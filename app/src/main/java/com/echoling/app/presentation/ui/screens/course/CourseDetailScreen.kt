@@ -132,6 +132,14 @@ fun CourseDetailScreen(
                                     course = course,
                                     onClick = { onNavigateToPractice(course.courseId) },
                                     onDeleteClick = { courseToDelete = course.courseId },
+                                    // (2026-07-16) Wire the auto-subtitle
+                                    // FAILED chip to retry. Only the
+                                    // FAILED chip is enabled (see
+                                    // CourseListItem), so this lambda
+                                    // only fires for that branch.
+                                    onRetryTranscription = {
+                                        viewModel.retryAutoSubtitle(course.courseId)
+                                    },
                                 )
                             }
                             // Reserve space at the bottom so the last
