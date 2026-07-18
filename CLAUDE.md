@@ -3253,3 +3253,97 @@ RecordingOverlay 是 middle Column 的 last child before TestingControlBar，外
 - **重复功能的 UI 元素 = 迟早要去掉一个**：本节 RecordingPlaybackCard 与 SpeakingControlBar 第 4 个按钮重复了 `playRecording` 触发器，但**视觉层级不同**（card 比 button 大一个量级），导致用户对"哪个是播放入口"产生认知负担。**MVP 设计原则**：同一功能的入口永远只有一条最显眼的路径
 - **red circle 的对齐（BottomCenter vs Center）在大屏手机 + 24dp 槽位时差异可达 30dp+** —— 圆圈直径 140dp，超过半个屏幕高度的 ~10%。`BottomCenter` 让圆圈看起来"在底部"而不是"悬浮中段"，符合用户对录音态视觉直觉（"我正在对 mic 说话，按钮就在 mic 上方"）
 - **下一个候选**：ReciteScreen 闪卡页如果加录音评分功能，可能也需要同样的 RedRecordCircle —— 复用 §12.42 的 `Box(heightIn min 48 max 140, Alignment.BottomCenter)` 包装即可
+
+### 12.43 自动字幕生成（Vosk + ffmpeg-kit 完全离线，2026-07-15）
+
+**原因**：用户反馈"我导入视频时如果没字幕就没法跟读"——以前必须先用外部工具（Audacity / ffmpeg）剥离音频再喂给云端 STT，违反复习流程的离线原则。新增一键本地化方案：导入音视频时不传字幕可以点"立即转字幕"或"稍后转字幕"，后台 ffmpeg 抽 WAV → Vosk 离线 STT → 写成 `.srt` 文件到 `filesDir/courses/<id>.srt`，与手传字幕共用同一字段，零下游代码改动。完整 spec 在 `docs/superpowers/specs/2026-07-15-auto-subtitle-vosk-android-design.md`，5 任务切片 plan 在 `docs/superpowers/plans/2026-07-15-auto-subtitle-vosk-android.md`。
+
+**改动文件**：
+
+| 路径 | 类型 |
+|---|---|
+| [app/build.gradle.kts](app/build.gradle.kts) | 加 `ffmpeg-kit-min-gpl:6.0-2` + `work-runtime-ktx:2.9.1` + `hilt-work:1.1.0` |
+| [AutoSubtitleStatus.kt](app/src/main/java/com/echoling/app/domain/model/AutoSubtitleStatus.kt) | 新建 enum（PENDING / IN_PROGRESS / READY / FAILED ↔ string） |
+| [CourseEntity.kt](app/src/main/java/com/echoling/app/data/local/db/entity/CourseEntity.kt) | 加 3 列：`autoSubtitleStatus` / `autoSubtitleErrorMessage` / `autoSubtitleProgress` |
+| [Migrations.kt](app/src/main/java/com/echoling/app/data/local/db/Migrations.kt) | `MIGRATION_5_6`：3 个 `ALTER TABLE ADD COLUMN` 全 nullable / `DEFAULT 0` |
+| [EchoLingDatabase.kt](app/src/main/java/com/echoling/app/data/local/db/EchoLingDatabase.kt) | version `5 → 6` |
+| [CourseDao.kt](app/src/main/java/com/echoling/app/data/local/db/dao/CourseDao.kt) | 5 新方法：`updateAutoSubtitleStatus` / `updateAutoSubtitleProgress` / `markTranscriptionStarted` / `markTranscriptionCompleted` / `markTranscriptionFailed` |
+| [CourseRepository.kt](app/src/main/java/com/echoling/app/domain/repository/CourseRepository.kt) + [CourseRepositoryImpl.kt](app/src/main/java/com/echoling/app/data/repository/CourseRepositoryImpl.kt) | 4 新方法（上面 DAO 的 worker-facing 部分）+ entity↔domain mapper 加 3 字段 |
+| [VoskSegment.kt](app/src/main/java/com/echoling/app/transcription/VoskSegment.kt) | 新建纯数据类（`startMs` / `endMs` / `text`） |
+| [SrtSynthesizer.kt](app/src/main/java/com/echoling/app/transcription/SrtSynthesizer.kt) | 新建纯 Kotlin Vosk→SRT 转换器（12 单测全过） |
+| [SrtSynthesizerTest.kt](app/src/test/java/com/echoling/app/transcription/SrtSynthesizerTest.kt) | 12 单测（empty / single / multi / END_PAD / word-split / duration-split / special-chars / formatTimestamp 边界 / overlapping-windows） |
+| [AutoSubtitleStatusTest.kt](app/src/test/java/com/echoling/app/data/local/db/AutoSubtitleStatusTest.kt) | 4 单测（round-trip / null / unknown / hasIssue） |
+| [FfmpegAudioExtractor.kt](app/src/main/java/com/echoling/app/transcription/FfmpegAudioExtractor.kt) | ffmpeg-kit 包装：`ffmpeg -y -i <mp4> -vn -ac 1 -ar 16000 -f wav` → `cacheDir/auto_subtitle/<id>.wav` |
+| [VoskSpeechRecognizer.kt](app/src/main/java/com/echoling/app/speech/VoskSpeechRecognizer.kt) | 加 `transcribeFileWithSegments(wavPath)`：永远 `setWords(true)` 拿 per-word timestamps |
+| [AutoTranscriptionScheduler.kt](app/src/main/java/com/echoling/app/transcription/AutoTranscriptionScheduler.kt) | facade：`enqueueUniqueWork(REPLACE)` + `observeWorkInfo(courseId)` 返回 `Flow<List<WorkInfo>>` |
+| [AutoTranscriptionWorker.kt](app/src/main/java/com/echoling/app/transcription/AutoTranscriptionWorker.kt) | 4 步管线（0–30: ffmpeg / 30–70: Vosk / 70–95: SRT 写盘 / 95–100: markCompleted）+ 1Hz 限流 + cache WAV 缺失时 step 1 重跑 + CancellationException 显式重抛（**见 §12.43 关键纪律**） |
+| [EchoLingApplication.kt](app/src/main/java/com/echoling/app/EchoLingApplication.kt) | 实现 `Configuration.Provider` 注入 `HiltWorkerFactory` |
+| [AndroidManifest.xml](app/src/main/AndroidManifest.xml) | `tools:node="remove"` 删默认 `WorkManagerInitializer` |
+| [ImportViewModel.kt](app/src/main/java/com/echoling/app/presentation/viewmodel/ImportViewModel.kt) | 加 2 方法：`importCourseWithImmediateTranscription`（observe WorkInfo 阻塞 UI）/ `importCourseWithDeferredTranscription`（enqueue 后立即返回）+ 共享 `createCourseEntity` helper |
+| [strings.xml](app/src/main/res/values/strings.xml) | 14 个新 string（卡片标题/正文/立即+稍后按钮/进度格式/3 个 chip 文案/Practice 空态/重试标题+按钮） |
+| [ImportScreen.kt](app/src/main/java/com/echoling/app/presentation/ui/screens/import/ImportScreen.kt) | `AutoSubtitleCard` composable：3 态 IDLE 双按钮 / EXTRACTING·TRANSCRIBING·SYNTHESIZING 进度 / COMPLETED 单帧绿勾 |
+| [CourseListItem.kt](app/src/main/java/com/echoling/app/presentation/ui/components/CourseListItem.kt) | `AssistChip` + `ChipData` 数据类：3 态 chip（PENDING / IN_PROGRESS 禁用；FAILED 可点重试）；Card 的 `clickable` 在 PENDING / IN_PROGRESS 时 `enabled = false` 防半成品课程进 Practice |
+| [CourseDetailViewModel.kt](app/src/main/java/com/echoling/app/presentation/viewmodel/CourseDetailViewModel.kt) + [CourseDetailScreen.kt](app/src/main/java/com/echoling/app/presentation/ui/screens/course/CourseDetailScreen.kt) | `retryAutoSubtitle(courseId)`：删 stale `.srt` → `markTranscriptionStarted` → 重新 `enqueue(REPLACE)`；wire `onRetryTranscription = { viewModel.retryAutoSubtitle(course.courseId) }`（注意：chip 在 `CourseDetailScreen` 调用，不是 `CoursesScreen`——`CoursesScreen` 用 `CourseGroupItem` 文件夹行） |
+| [PracticeViewModel.kt](app/src/main/java/com/echoling/app/presentation/viewmodel/PracticeViewModel.kt) | 加 sealed class `LoadSubtitleState`（Ready / NotReady / LoadError）+ `resolveSubtitleState(courseId)`：`subtitleUri == null && (PENDING || IN_PROGRESS)` 走 NotReady；其他走 Ready / LoadError；初始值 `Ready("")` 避免页面切入 ~350ms flicker |
+| [PracticeScreen.kt](app/src/main/java/com/echoling/app/presentation/ui/screens/practice/PracticeScreen.kt) | `SubtitleNotReadyView` composable：48dp HourglassEmpty tertiary icon + `R.string.auto_subtitle_practice_empty` 标题 + "「$courseName」" 副文本 + "返回课程列表" 按钮；dispatch 时 NotReady 优先于 currentPage |
+
+**4 步管线（worker 入口到完成）**：
+
+```
+0%    markTranscriptionStarted() → status=PENDING, errorMessage=null, progress=0
+       ↓
+0-30% ffmpeg: extract Mono 16kHz WAV → cacheDir/auto_subtitle/<id>.wav (cacheDir 重新生成 OK，sub-dir owned by class+worker)
+       ↓ throttleProgress(courseId, _, 30)  ← setProgress + DB write 1Hz
+30-70% Vosk: transcribeFileWithSegments → List<VoskSegment>，每段带 (startMs, endMs, text)，从 per-word timestamps 推出（setWords(true) 必须）
+       ↓ throttleProgress(courseId, _, 70)
+70-95% SrtSynthesizer.toSrt → filesDir/courses/<id>.srt；markTranscriptionCompleted(srtPath, totalSentences)
+       ↓ throttleProgress(courseId, _, 95)
+95-100% cleanupTempWav(courseId) + Result.success
+```
+
+**resume after process death**：worker 入口读 `autoSubtitleProgress`：
+- `startProgress < 30` → 跑 step 1
+- `startProgress < 70` → step 1 缓存 WAV 检查：丢失则重跑 ffmpeg（process death + cacheDir GC 场景），否则跑 Vosk
+- `startProgress < 95` → 必须重跑 Vosk（segments 不写盘，只进度写），合成 SRT
+- ≥ 95 → 跳过 1-3，只差 cleanup
+
+**关键纪律 / 禁止行为**：
+
+1. **❌ ViewModel 注入不能裸用动词前缀** —— `CourseDetailViewModel` 注入 `CourseRepository` / `AutoTranscriptionScheduler`（**描述性名**，`courseRepository` / `autoTranscriptionScheduler`），不能叫 `repo` / `scheduler` / `autoTranscription`。**§12.14 同源**：避免属性 / 函数同名无限递归（deleteCourse 历史上因此卡死过；inject `autoTranscriptionScheduler` 不与任何 class method 冲突）。如果未来要加更多 worker-facing 注入也保持描述性名。
+
+2. **❌ worker 体外包 `runCatching { ... }`** —— commit `871244d` 的修正：`runCatching` 把 `CancellationException`（`Throwable` 子类）当失败处理 → WorkManager 取消时把课程标 FAILED。改用 `try { ... } catch (e: CancellationException) { cleanupTempWav; throw e } catch (e: Throwable) { markTranscriptionFailed; Result.failure(...) }`。**CancellationException 分支必须 throw e，不要 return Result.failure**，否则 WorkManager 不感知取消。下次新增 CoroutineWorker + Room 状态写，沿用同模式。
+
+3. **❌ `ImportViewModel.importCourseWithImmediateTranscription` 的 `workInfoFlow.collect { ... return@collect }` 不要 `.collectLatest`** —— `collectLatest` 会取消前一次仍在跑的 collect，状态机进入 ENQUEUED 后立刻被取消 → UI 永久卡在 "正在识别中… 0%"。普通 `collect { }` + `return@collect`（SUCCESS / FAILED / CANCELLED 三个终态触发）即可。
+
+4. **❌ `retryAutoSubtitle` 不要忘掉 `null` 字幕 URI** —— 如果上轮 worker 写到 subtitleUri 但 markTranscriptionCompleted 没跑（磁盘满 / 进程死），retry 必须先删 stale `.srt` 再 enqueue；`File(course.subtitleUri)` 会 NPE on null（虽然 runCatching 兜住了，靠 NPE 当控制流是 latent bug），现在强制 `course.subtitleUri?.let { File(it).delete() }`。**Nice-to-have 没做**：retry 时不清 DB `subtitleUri` 列；下次用户跑 leftover stale 路径再补一个 Room UPDATE 即可。
+
+5. **❌ `PracticeViewModel._subtitleLoadState` 初值不能用 `LoadError("Not loaded yet")`** —— 页面切入 ~350ms 动画期间 Compose 已 collect，rendering ListeningPage with null course context。init 用 `Ready("")`，让 `loadCourse` 解析完后用真实值替换。
+
+6. **❌ Plan 错把 `CourseListItem` 归属写到 `CoursesScreen.kt` + `CoursesViewModel.kt`** —— 实际归属是 `CourseDetailScreen.kt` + `CourseDetailViewModel.kt`（`CoursesScreen` 用 `CourseGroupItem` 文件夹行）。本节 retry wiring 走 `CourseDetailViewModel`（同一个 VM 持有 `CourseDetailViewModel(courseId)`），不要强行用 `CoursesViewModel` 跨 VM。
+
+7. **❌ ffmpeg-kit-min-gpl 整 APK 强 GPL** —— AAR vendored 在 `app/libs/ffmpeg-kit-min-gpl-6.0-2.aar`（`gradle.properties` 已声明 fileTree dependencies 不走 Maven，因为 Arthenica 2025 撤下 Maven Central 镜像）。README §已知限制已说明，**未来要分发到 GMS 强制 LGPL 的国外渠道前必须换 min (LGPL) — 但会丢 DTS / FLAC / Opus 解码**。
+
+8. **❌ AutoSubtitleCard 用 `getMediaDurationFromUri` 做"长音频 > 30 分钟" Snackbar 警告** —— plan 说"later"，本轮只放空 placeholder。Snackbar 需要父 Scaffold 拿 host state；如果以后加，Card 接 SnackbarHostState from parent 或包一个 LocalSnackbarHost。
+
+9. **✅ 16KB page-size alignment 自动覆盖新 ffmpeg `.so`** —— §12.33 的 `patchNativeLibsFor16KB` (Layer 1) + `repackApk16kb` (Layer 2a/b + 重新签名) 不需改一行 — `packageDebug.doFirst` glob `.so` 时自动 pickup `libavcodec / libavformat / libavutil / libswresample / libffmpegkit` 5 个新文件。
+
+10. **✅ SrtSynthesizer 端口自 `split_srt_sentences.py:684`** —— 中文文档，`END_PAD_MS=400 / MAX_SEGMENT_DURATION_MS=8000 / MAX_SEGMENT_WORDS=12 / OVERLAP_MS=750` 4 个常量。
+
+**测试验证**：
+
+- `./gradlew testDebugUnitTest` → 16 单测全过（4 AutoSubtitleStatus + 12 SrtSynthesizer）✅
+- `./gradlew assembleDebug` → BUILD SUCCESSFUL ✅
+- `python scripts/repack_apk_16kb.py app/build/outputs/apk/debug/app-debug.apk` → `realigned 13 .so entries (5 → 0 misaligned)`（8 vosk/jna + 5 ffmpeg）✅
+- 真机 end-to-end：
+  - 导入 30 秒 `.mp3` 无字幕 → ImportScreen 显 AutoSubtitleCard → 点"立即转字幕" → 卡片进度 0% → 30% → 70% → 95% → 100% → 绿勾 → 跳转 CourseDetail
+  - 同上但导入 `.mp4` MKV（DTS 音频需先按 §"已知限制" remux 到 AAC）：ffmpeg 转 WAV 后正常识别
+  - 课程列表（CourseDetail）chip 显示 READY 后不显示；导入时按"稍后转字幕"chip 显示"字幕识别中 X%"
+  - "长按重试" FAILED chip → chip 回 PENDING → IN_PROGRESS → READY
+  - 进 Practice：READY 课程显示识别英文；PENDING / IN_PROGRESS 课程显示 SubtitleNotReadyView（48dp 沙漏 + 课程名 + 返回按钮）；FAILED 课程仍显示 LoadError
+
+**禁止 bug 回归**：
+
+- ❌ 加任何 `INTERNET` 权限（offline 品牌承诺）—— ffmpeg-kit / Vosk / SrtSynthesizer 全本地
+- ❌ 改 `markTranscriptionStarted` 的 SQL（3 列写 NULL 都 OK，但加 NOT NULL 列破坏旧 v6 DB）
+- ❌ 改 `setProgress` 后挪出 worker body（`setProgress` 不能在 cleanup 路径之后调，否则 Cancel 后调 setProgress 抛异常）
+- ❌ 把 `AutoSubtitleChip` PENDING/IN_PROGRESS 改成可点击（会出现 ripple 但无动作；commit `f73396d` 已修 `enabled = chipData.enabled`）

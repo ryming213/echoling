@@ -21,6 +21,15 @@
 - 闪卡正面 / 反面 / 生词本每个单词配 **TTS 喇叭按钮**（内置 + 多引擎 fallback）
 - 例句展示（英文 + 中文翻译对照）
 
+### 🎬 自动字幕生成 · 完全离线
+
+- 导入音视频（`.mp3` / `.mp4` / `.mkv`）时不传字幕，可点 **「立即转字幕」** 或 **「稍后转字幕」**
+- 全本地管线：`ffmpeg-kit-min-gpl 6.0-2` 抽 16 kHz Mono WAV → `Vosk small` 离线 STT → `SrtSynthesizer` 纯 Kotlin 拼 `.srt` → 写入 `filesDir/courses/<id>.srt`
+- 生成结果与手传字幕共用 `subtitleUri` 字段，**零下游代码改动** —— 直接进跟读练习
+- 课程列表 chip 实时显示进度：`字幕识别中 N%` / `字幕识别失败，点击重试` / READY 后 chip 消失
+- 进 Practice 时若字幕还在识别：显示 `字幕正在识别中… 请稍后回来`（48dp 沙漏 + 返回按钮），不报错
+- **`setRequiresStorageNotLow`** —— worker 会在低存储时自动 defer
+
 ### 🎯 跟读练习 · 三个 Tab 全场景
 
 | Tab | 功能 |
