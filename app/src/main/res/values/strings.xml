@@ -46,4 +46,20 @@
     <string name="grade_tier_pass">合格</string>
     <string name="grade_too_short">录音过短，请重新录制</string>
     <string name="grade_your_score">本次得分</string>
+
+    <!-- Auto-subtitle generation (2026-07-15, spec §7) -->
+    <string name="auto_subtitle_card_title">✨ 自动生成字幕</string>
+    <string name="auto_subtitle_card_body">未检测到字幕文件,可用 Vosk 离线识别音频生成英文字幕,完全离线无需联网。</string>
+    <string name="auto_subtitle_btn_immediate">立即转字幕</string>
+    <string name="auto_subtitle_btn_deferred">稍后转字幕</string>
+    <string name="auto_subtitle_progress_format">正在识别中… %1$d%%</string>
+    <string name="auto_subtitle_chip_pending">字幕待识别</string>
+    <string name="auto_subtitle_chip_in_progress">字幕识别中 %1$d%%</string>
+    <string name="auto_subtitle_chip_failed">字幕识别失败,点击重试</string>
+    <string name="auto_subtitle_practice_empty">字幕正在识别中… 请稍后回来</string>
+    <string name="auto_subtitle_practice_back">返回课程列表</string>
+    <string name="auto_subtitle_long_warning">音频较长(超过 30 分钟),识别可能需要 10 分钟以上</string>
+    <string name="auto_subtitle_retry_title">重试识别</string>
+    <string name="auto_subtitle_retry_confirm">重试</string>
+    <string name="auto_subtitle_retry_cancel">取消</string>
 </resources>
