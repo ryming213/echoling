@@ -59,7 +59,7 @@ class AutoTranscriptionWorker @AssistedInject constructor(
         // per-invocation suffix logic.
         val wavPath = wavFileFor(courseId).absolutePath
 
-        return runCatching {
+        return try {
             // segments is held in memory so step 3 can reuse them
             // without re-running Vosk (Vosk is the slowest step).
             var segments: List<VoskSegment>? = null
@@ -118,7 +118,7 @@ class AutoTranscriptionWorker @AssistedInject constructor(
             // Final 100% publish — best-effort. markTranscriptionCompleted
             // already wrote READY (source of truth). If we got here, work is
             // done. Any failure in this terminal block (Room, fs) is caught
-            // by the outer runCatching and would downgrade READY to FAILED —
+            // by the outer try/catch and would downgrade READY to FAILED —
             // that's a recoverable race; the next re-enqueue writes READY
             // again. We intentionally return Result.success() so WorkManager
             // observes SUCCEEDED regardless of cancellation state: the chip
@@ -128,7 +128,12 @@ class AutoTranscriptionWorker @AssistedInject constructor(
             courseRepo.updateTranscriptionProgress(courseId, 100)
             cleanupTempWav(courseId)
             Result.success()
-        }.getOrElse { e ->
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Structured-concurrency cancellation: let it propagate; do NOT
+            // mark the course FAILED (WorkManager cancelled, not crashed).
+            cleanupTempWav(courseId)
+            throw e
+        } catch (e: Throwable) {
             Log.e(TAG, "auto-transcription failed for $courseId", e)
             // Wrap the failure-path side effects: if Room throws
             // inside markTranscriptionFailed (e.g. disk full), the
