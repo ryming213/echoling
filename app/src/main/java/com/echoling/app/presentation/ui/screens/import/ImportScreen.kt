@@ -10,9 +10,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AudioFile
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.VideoFile
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.AudioFile
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.VideoFile
@@ -20,10 +24,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.echoling.app.R
 import com.echoling.app.presentation.ui.components.PageHeader
+import com.echoling.app.presentation.viewmodel.AutoTranscriptionPhase
 import com.echoling.app.presentation.viewmodel.ImportState
 import com.echoling.app.presentation.viewmodel.ImportViewModel
 
@@ -74,6 +81,16 @@ fun ImportScreen(
 
     val importState by viewModel.importState.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
+
+    // (2026-07-16) Auto-subtitle plumbing. The card is shown only
+    // when the user has selected audio/video (so there's something
+    // to transcribe) but no subtitle file yet. Once they pick a
+    // subtitle, the manual flow wins and the card disappears.
+    val autoPhase by viewModel.autoTranscriptionPhase.collectAsState()
+    val autoProgress by viewModel.autoTranscriptionProgress.collectAsState()
+
+    val canShowAutoSubtitleCard =
+        (audioUri != null || videoUri != null) && subtitleUri == null
 
     val audioPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -239,6 +256,40 @@ fun ImportScreen(
                     },
                     enabled = importState != ImportState.IMPORTING
                 )
+
+                // (2026-07-16) Auto-subtitle card. Only visible when
+                // a media file is selected but no subtitle file yet —
+                // the user gets a single CTA surface for "立即转字幕"
+                // (block until SRT is ready) vs "稍后转字幕" (enqueue
+                // and let the chip on the course list track progress).
+                if (canShowAutoSubtitleCard) {
+                    AutoSubtitleCard(
+                        phase = autoPhase,
+                        progress = autoProgress,
+                        onImmediate = {
+                            if (courseTitle.isNotBlank() && courseName.isNotBlank()) {
+                                viewModel.importCourseWithImmediateTranscription(
+                                    courseName = courseName,
+                                    title = courseTitle,
+                                    difficulty = selectedDifficulty,
+                                    audioUri = audioUri,
+                                    videoUri = videoUri,
+                                )
+                            }
+                        },
+                        onDeferred = {
+                            if (courseTitle.isNotBlank() && courseName.isNotBlank()) {
+                                viewModel.importCourseWithDeferredTranscription(
+                                    courseName = courseName,
+                                    title = courseTitle,
+                                    difficulty = selectedDifficulty,
+                                    audioUri = audioUri,
+                                    videoUri = videoUri,
+                                )
+                            }
+                        },
+                    )
+                }
 
                 // Difficulty selector
                 Card(
@@ -447,6 +498,126 @@ private fun FileSelectorCard(
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(20.dp)
                 )
+            }
+        }
+    }
+}
+
+/**
+ * (2026-07-16) Auto-subtitle entry card. Shows on ImportScreen when a
+ * media file is selected but no subtitle file is — gives the user a
+ * single surface with two paths:
+ *
+ *  - IDLE: two side-by-side buttons (immediate vs deferred).
+ *  - EXTRACTING / TRANSCRIBING / SYNTHESIZING: progress + percent.
+ *  - COMPLETED: confirmation checkmark + brief message; the screen
+ *    then transitions out via ImportState.SUCCESS.
+ *
+ * Body text is the same across phases; only the action area changes.
+ * This keeps the card height stable and avoids layout shift during
+ * the 4-step pipeline.
+ */
+@Composable
+private fun AutoSubtitleCard(
+    phase: AutoTranscriptionPhase,
+    progress: Int,
+    onImmediate: () -> Unit,
+    onDeferred: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+        ) {
+            // Header: icon + title row
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Filled.AutoAwesome,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = stringResource(R.string.auto_subtitle_card_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.auto_subtitle_card_body),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            when (phase) {
+                AutoTranscriptionPhase.IDLE -> {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        OutlinedButton(
+                            onClick = onDeferred,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text(stringResource(R.string.auto_subtitle_btn_deferred))
+                        }
+                        Button(
+                            onClick = onImmediate,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary,
+                            ),
+                        ) {
+                            Text(stringResource(R.string.auto_subtitle_btn_immediate))
+                        }
+                    }
+                }
+                AutoTranscriptionPhase.EXTRACTING,
+                AutoTranscriptionPhase.TRANSCRIBING,
+                AutoTranscriptionPhase.SYNTHESIZING -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = stringResource(
+                                R.string.auto_subtitle_progress_format,
+                                progress,
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+                AutoTranscriptionPhase.COMPLETED -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Filled.CheckCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "字幕已生成",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
             }
         }
     }
