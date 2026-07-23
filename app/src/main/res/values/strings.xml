@@ -48,12 +48,23 @@
     <string name="grade_your_score">本次得分</string>
 
     <!-- Auto-subtitle generation (2026-07-15, spec §7) -->
-    <string name="auto_subtitle_card_title">✨ 自动生成字幕</string>
+    <!-- (2026-07-18) auto_subtitle_card_title removed — title is now
+         inlined in ImportScreen.kt ("自动生成字幕", titleMedium to match
+         the "字幕文件（可选）" header above). Keeping the key would
+         silently resurface the ✨ emoji if any other caller is added.
+         The two progress_format / chip_in_progress strings below are
+         retained for rollback safety (no callers since 2026-07-18). -->
     <string name="auto_subtitle_card_body">未检测到字幕文件,可用 Vosk 离线识别音频生成英文字幕,完全离线无需联网。</string>
     <string name="auto_subtitle_btn_immediate">立即转字幕</string>
     <string name="auto_subtitle_btn_deferred">稍后转字幕</string>
+    <!-- deprecated 2026-07-18: progress is now shown via the bottom
+         long-line bar (AutoSubtitleProgressLine, labelPosition=AboveLeft)
+         instead of "正在识别中… N%". Retained for rollback. -->
     <string name="auto_subtitle_progress_format">正在识别中… %1$d%%</string>
     <string name="auto_subtitle_chip_pending">字幕待识别</string>
+    <!-- deprecated 2026-07-18: IN_PROGRESS chip replaced by the top
+         long-line bar (AutoSubtitleProgressLine, labelPosition=BelowLeft).
+         Retained for rollback. -->
     <string name="auto_subtitle_chip_in_progress">字幕识别中 %1$d%%</string>
     <string name="auto_subtitle_chip_failed">字幕识别失败,点击重试</string>
     <string name="auto_subtitle_practice_empty">字幕正在识别中… 请稍后回来</string>

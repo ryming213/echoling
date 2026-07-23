@@ -34,14 +34,16 @@ import androidx.compose.ui.unit.dp
  *
  * 历史：
  *  - f1f40b5: Card(errorContainer) + PulsingRedDot + 5 根 AmplitudeBars + 计时/取消按钮
- *  - 今天会话开头（字节级状态没了）：青色圆盘 + 左右涟漪
- *  - 第一轮重建（卡片版）：蓝色渐变卡片 + 请复述 + 红圈 + 涟漪 + 计时
- *  - 第二轮：去掉卡片，只渲染红圈 + 填色圆盘式涟漪（用户报"只有1层"）
- *  - 当前：去掉卡片，红圈 + 3 道 **Stroke 描边** 涟漪（拉开 scale 1.0×→2.4×，
- *    alpha 用慢淡出（保留 40% 残影）保证三层同时可见）
+ *  - 字节级状态没了: 青色圆盘 + 左右涟漪
+ *  - 第一轮重建（卡片版）: 蓝色渐变卡片 + 请复述 + 红圈 + 涟漪 + 计时
+ *  - 第二轮: 去掉卡片，只渲染红圈 + 填色圆盘式涟漪（用户报"只有1层"）
+ *  - 2026-07-10 §12.42: 红圈 + 3 道 Stroke 描边涟漪
+ *  - 2026-07-22 短暂改为蓝色波形 (用户觉得太丑, 立即回退)
+ *  - 当前: 回到红圈 + 3 道 Stroke 描边涟漪, 字号 labelMedium (保留下
+ *    wrap 修复, 不回退)
  *
- * API 简化：移除了 [elapsedMs] / [amplitudeBars] 入参 —— 当前视觉不需要。
- * 调用方 [TestingPage.kt] 也会同步简化调用点。
+ * API 简化: 移除了 [elapsedMs] / [amplitudeBars] 入参 —— 当前视觉不需要.
+ * 调用方 [TestingPage.kt] 也会同步简化调用点.
  */
 @Composable
 fun RecordingOverlay(
@@ -76,12 +78,21 @@ fun RecordingOverlay(
  *  - phase 偏移 0 / 0.33 / 0.66（一个 ripple 周期 = 2000ms）
  *  - baseAlpha 三档 0.55 / 0.40 / 0.28 —— 让内圈更亮、外圈更淡，层次感清晰
  *  - Canvas 尺寸 = sizeDp × 1.6 给最大 ring 留余量
- *  - 文本用 labelLarge (14sp Medium)，比 titleMedium 略小，与紧凑的圆圈比例更协调
+ *      （当前默认 100dp → 画布 160dp；之前 140dp → 画布 224dp，
+ *        减了 64dp 的水平带高度，避免挡住下面的话筒）
+ *  - (2026-07-22) 文本用 labelMedium (12sp Medium), maxLines=1,
+ *    softWrap=false 双保险——上一轮用户报"调整小了动画之后, 正在录音
+ *    被换行了", 100dp 红圈在不同 system font (小米 Mi 11 CN MiSans VF)
+ *    实测撑到 60+ dp, labelLarge (14sp) 触发 wrap. labelMedium 收敛到
+ *    ~48dp, 留 12dp × 2 边距.
  */
 @Composable
 fun RedRecordCircle(
     modifier: Modifier = Modifier,
-    sizeDp: Dp = 140.dp,
+    // (2026-07-18) 第四轮调整前默认 140dp；用户反馈"再小一号"，
+    // 降到 100dp 让录制动画不再压住下面的话筒 / 进度条。
+    // 涟漪画布 sizeDp * 1.6 = 160dp，给最大 ring 仍留 30dp 余量。
+    sizeDp: Dp = 100.dp,
 ) {
     val transition = rememberInfiniteTransition(label = "ripple")
     val globalProgress by transition.animateFloat(
@@ -165,8 +176,20 @@ fun RedRecordCircle(
         ) {
             Text(
                 text = "正在录音",
-                style = MaterialTheme.typography.labelLarge,
+                // (2026-07-22) §17.X: labelLarge (14sp) → labelMedium
+                // (12sp Medium). centerDiscSize = sizeDp * 0.72 = 100dp
+                // * 0.72 = 72dp 直径. 4 个中文字符在 labelLarge 下 ≈
+                // 56dp 宽, 在不同 system font (e.g. 小米 Mi 11 CN 的
+                // MiSans VF) 实测会撑到 60+ dp, 离 72dp 边界只剩 ~6dp,
+                // 任何 letter-spacing 或字号继承波动都会让 Text 触发 wrap
+                // → "正在录 / 音" 两行. labelMedium (12sp) 收敛到 ~48dp,
+                // 留 12dp × 2 边距, 同时 maxLines = 1 + softWrap = false
+                // 双保险: 即使将来 sizeDp 继续下调 (e.g. 80dp), 文字也不会
+                // 自动换行, 而是整体收缩或截断 (更易被发现 vs 静默换行).
+                style = MaterialTheme.typography.labelMedium,
                 color = Color.White,
+                maxLines = 1,
+                softWrap = false,
             )
         }
     }

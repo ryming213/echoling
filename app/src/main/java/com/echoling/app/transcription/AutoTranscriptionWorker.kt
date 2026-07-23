@@ -35,6 +35,15 @@ import java.io.File
  * **Cancellation**: WorkManager sets `isStopped` when the user
  * cancels; we check it after each `setProgress` call to bail out
  * early and mark FAILED.
+ *
+ * **Logging**: every step writes one line at `Log.i` so a 5-min
+ * video stuck at 0% on a real device can be diagnosed with
+ * `adb logcat -s AutoTranscriptionWorker:V` — you should see
+ * `doWork START` → `step1 ffmpeg.start` → `step1 ffmpeg.done
+ * elapsedMs=...` → `step2 vosk.start` → ... If you only see
+ * `doWork START` and nothing else, the worker is hung in ffmpeg
+ * or Vosk; if you don't see `doWork START` at all, WorkManager
+ * has not started the work (constraint / system deferral).
  */
 @HiltWorker
 class AutoTranscriptionWorker @AssistedInject constructor(
@@ -51,6 +60,8 @@ class AutoTranscriptionWorker @AssistedInject constructor(
         val mediaPath = inputData.getString(KEY_MEDIA_PATH)
             ?: return Result.failure(workDataOf("error" to "Missing mediaPath"))
 
+        Log.i(TAG, "doWork START courseId=$courseId mediaPath=$mediaPath")
+
         val existing = courseRepo.getCourseById(courseId)
         val startProgress = existing?.autoSubtitleProgress ?: 0
         // Hoist wavPath so step 2 (delete check + Vosk) and step 3
@@ -58,6 +69,7 @@ class AutoTranscriptionWorker @AssistedInject constructor(
         // here would silently diverge if wavFileFor(...) ever gains
         // per-invocation suffix logic.
         val wavPath = wavFileFor(courseId).absolutePath
+        Log.i(TAG, "doWork startProgress=$startProgress wavPath=$wavPath")
 
         return try {
             // segments is held in memory so step 3 can reuse them
@@ -66,17 +78,45 @@ class AutoTranscriptionWorker @AssistedInject constructor(
 
             if (startProgress < 30) {
                 courseRepo.markTranscriptionStarted(courseId)
+                Log.i(TAG, "step1 ffmpeg.start mediaPath=$mediaPath")
+                val ffmpegStart = System.currentTimeMillis()
                 ffmpeg.extractMono16kWav(mediaPath, courseId).getOrThrow()
+                Log.i(
+                    TAG,
+                    "step1 ffmpeg.done elapsedMs=${System.currentTimeMillis() - ffmpegStart} " +
+                        "wav=${File(wavPath).length()}bytes",
+                )
                 throttleProgress(courseId, 30)
             }
 
             if (startProgress < 70) {
                 if (!File(wavPath).exists()) {
+                    Log.w(TAG, "step2 wav missing on disk — re-running ffmpeg")
                     // Process death + cacheDir GC — redo step 1.
                     ffmpeg.extractMono16kWav(mediaPath, courseId).getOrThrow()
                     throttleProgress(courseId, 30)
                 }
-                segments = vosk.transcribeFileWithSegments(wavPath).getOrThrow()
+                Log.i(TAG, "step2 vosk.start wav=${File(wavPath).length()}bytes")
+                val voskStart = System.currentTimeMillis()
+                // (2026-07-18) Pass a progress callback so the bar
+                // advances during the Vosk step (the longest step —
+                // 30..70% range). Vosk fires ~4 Hz (8 KB PCM chunks /
+                // 16 kHz mono = ~250 ms/chunk); throttleProgress
+                // gates publishing to 1 Hz so most callbacks are
+                // dropped, and the UI animates between publishes.
+                // Remap Vosk's 0..1 byte-fraction to the worker's
+                // 30..70 range.
+                segments = vosk.transcribeFileWithSegments(
+                    wavPath = wavPath,
+                    progressCallback = { frac ->
+                        throttleProgress(courseId, 30 + (frac * 40).toInt())
+                    },
+                ).getOrThrow()
+                Log.i(
+                    TAG,
+                    "step2 vosk.done elapsedMs=${System.currentTimeMillis() - voskStart} " +
+                        "segments=${segments.size}",
+                )
                 if (segments.isEmpty()) {
                     throw IllegalStateException("未识别到任何语音")
                 }
@@ -98,6 +138,7 @@ class AutoTranscriptionWorker @AssistedInject constructor(
                     // broken" state.
                     throw IllegalStateException("未识别到任何语音")
                 }
+                Log.i(TAG, "step3 srt.start segments=${resolvedSegments.size}")
                 val srtText = SrtSynthesizer.toSrt(resolvedSegments)
                 val srtFile = File(applicationContext.filesDir, "courses/$courseId.srt")
                 srtFile.parentFile?.mkdirs()
@@ -112,6 +153,7 @@ class AutoTranscriptionWorker @AssistedInject constructor(
                     srtPath = srtFile.absolutePath,
                     totalSentences = totalSentences.coerceAtLeast(0),
                 )
+                Log.i(TAG, "step3 srt.done cues=$totalSentences path=${srtFile.absolutePath}")
                 throttleProgress(courseId, 95)
             }
 
@@ -127,8 +169,10 @@ class AutoTranscriptionWorker @AssistedInject constructor(
             setProgress(workDataOf(KEY_PROGRESS to 100, KEY_COURSE_ID to courseId))
             courseRepo.updateTranscriptionProgress(courseId, 100)
             cleanupTempWav(courseId)
+            Log.i(TAG, "doWork DONE courseId=$courseId")
             Result.success()
-        } catch (e: kotlinx.coroutines.CancellationException) {
+        } catch (e: CancellationException) {
+            Log.w(TAG, "doWork CANCELLED courseId=$courseId (WorkManager stopped — not a real failure)")
             // Structured-concurrency cancellation: let it propagate; do NOT
             // mark the course FAILED (WorkManager cancelled, not crashed).
             cleanupTempWav(courseId)

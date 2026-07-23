@@ -7,6 +7,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import org.vosk.Model
 import org.vosk.Recognizer
+import java.io.File
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -131,16 +132,32 @@ class VoskSpeechRecognizer @Inject constructor(
      *      the user's reading speed decides whether the cue is
      *      long enough, not Vosk's confidence).
      *
+     * (2026-07-18) Added [progressCallback] so the auto-subtitle
+     * worker can push byte-level progress to the UI during the Vosk
+     * step (30..70% range of the overall pipeline — the longest
+     * step). The callback fires once per 8 KB PCM chunk with the
+     * fraction of audio bytes processed so far (0..1). Workers
+     * should gate publishing (1 Hz is fine — the UI animates between
+     * publishes) and remap the fraction into their overall progress
+     * range.
+     *
      * Returns a [Result] wrapping a list of [com.echoling.app.transcription.VoskSegment].
      * On failure the throwable is wrapped via [Result.failure] (same
      * convention as [transcribeFile]).
      */
     suspend fun transcribeFileWithSegments(
         wavPath: String,
+        // (2026-07-18) Suspend so the worker can call its own
+        // `throttleProgress` (suspend; uses `setProgress` + Room
+        // write) directly inside the callback without runBlocking.
+        // The chunk loop runs on Dispatchers.IO but the suspend
+        // dispatcher resumes back on IO when `throttleProgress`
+        // returns.
+        progressCallback: (suspend (Float) -> Unit)? = null,
     ): Result<List<com.echoling.app.transcription.VoskSegment>> = withContext(Dispatchers.IO) {
         try {
             val model = getOrLoadModel().getOrElse { return@withContext Result.failure(it) }
-            val segments = transcribeToSegments(model, wavPath)
+            val segments = transcribeToSegments(model, wavPath, progressCallback)
             Result.success(segments)
         } catch (e: Throwable) {
             Log.e(TAG, "transcribeFileWithSegments failed", e)
@@ -239,15 +256,35 @@ class VoskSpeechRecognizer @Inject constructor(
                     if (recognizer.acceptWaveForm(shorts, shortLen)) {
                         // Endpoint detected — this segment is now
                         // "committed". `recognizer.result` returns
-                        // its text in JSON form ({"text": "..."}).
-                        // Append it so a multi-segment recording
-                        // (e.g. mid-sentence pause) keeps every
-                        // segment instead of dropping the earlier
-                        // ones.
+                        // its text in JSON form.
+                        //
+                        // (2026-07-23) §17.X fix: when
+                        // [setMaxAlternatives] is > 0 (we use
+                        // [maxAlternatives] here), the result JSON
+                        // shape is:
+                        //   { "alternatives": [ {"text": "...", ...} ] }
+                        // — top-level "text" is absent. Reading it
+                        // directly returned "" → endpoint prefixes
+                        // were never accumulated → for a recording
+                        // like "I went to the store [pause] and
+                        // bought some apples", the user got back
+                        // ONLY the trailing segment ("and bought
+                        // some apples"); the first half was lost.
+                        //
+                        // Same bug as [appendSegmentFromResult]'s
+                        // (2026-07-18) entry — that helper was fixed
+                        // for the segments worker but THIS code path
+                        // (the testing page's n-best transcription)
+                        // was missed. Unwrap `alternatives[0]` here
+                        // the same way; fall back to the top-level
+                        // object when `alternatives` is absent (the
+                        // [setMaxAlternatives(0)] shape — defensive).
                         val partialJson = recognizer.result
                         Log.d(TAG, "endpoint partial: $partialJson")
-                        val partialText = JSONObject(partialJson)
-                            .optString("text", "").trim()
+                        val partialObj = JSONObject(partialJson)
+                        val source = partialObj.optJSONArray("alternatives")
+                            ?.optJSONObject(0) ?: partialObj
+                        val partialText = source.optString("text", "").trim()
                         if (partialText.isNotEmpty()) {
                             if (allText.isNotEmpty()) allText.append(' ')
                             allText.append(partialText)
@@ -261,7 +298,18 @@ class VoskSpeechRecognizer @Inject constructor(
             val finalJson = recognizer.finalResult
             Log.d(TAG, "final: $finalJson")
             val finalJsonObj = JSONObject(finalJson)
-            val finalText = finalJsonObj.optString("text", "").trim()
+            // (2026-07-23) §17.X fix: same alternatives[] unwrap as
+            // the endpoint partial above. Without this, `finalText`
+            // was always "" when [setMaxAlternatives] was > 0 and
+            // the top-1 candidate (the combined full transcript)
+            // never made it into [candidates] — only the raw
+            // alternatives list contributed, which is fine when the
+            // alternatives' text already covers everything, but
+            // lost the endpoint-accumulated prefix when the trailing
+            // segment wasn't in the alternatives (or was empty).
+            val finalSource = finalJsonObj.optJSONArray("alternatives")
+                ?.optJSONObject(0) ?: finalJsonObj
+            val finalText = finalSource.optString("text", "").trim()
 
             // (2026-07-10) n-best collection. Vosk's finalResult JSON
             // shape with setMaxAlternatives(N) is:
@@ -337,10 +385,19 @@ class VoskSpeechRecognizer @Inject constructor(
      * same way [transcribeWithAlternatives] does (accumulate
      * committed segments, then append the final un-committed
      * segment at EOF).
+     *
+     * (2026-07-18) [progressCallback] fires after every 8 KB chunk
+     * with the fraction of audio samples consumed (`pcmSamples /
+     * totalSamples`). `totalSamples` is derived from the WAV file
+     * size minus the 44-byte RIFF header; each int16 sample is 2
+     * bytes. A `coerceIn(0f, 1f)` guards against rounding when the
+     * file size is slightly larger than the actual sample payload
+     * (rare — some encoders pad the trailing byte).
      */
-    private fun transcribeToSegments(
+    private suspend fun transcribeToSegments(
         model: Model,
         wavPath: String,
+        progressCallback: (suspend (Float) -> Unit)? = null,
     ): List<com.echoling.app.transcription.VoskSegment> {
         val sampleRate = 16_000f
         val recognizer = Recognizer(model, sampleRate).apply {
@@ -348,6 +405,32 @@ class VoskSpeechRecognizer @Inject constructor(
             setMaxAlternatives(1)
         }
         val segments = ArrayList<com.echoling.app.transcription.VoskSegment>()
+        // PCM diagnostics — computed once while we walk the file.
+        // Used to disambiguate "audio was silent" vs "audio had content
+        // but Vosk found no speech" vs "Vosk crashed". The recognizer
+        // itself doesn't surface why it returned empty, so we look at
+        // the input ourselves. RMS is in int16 full-scale units; an
+        // MP3 normalized to 0 dBFS sits around 0.05-0.2; a quiet
+        // voice recording around 0.01-0.05; < 0.001 means effectively
+        // silent (or a bad decode that wrote zeros).
+        var pcmSamples = 0L
+        var nonZeroSamples = 0L
+        var absSum = 0L
+        var peakAbs = 0
+        // (2026-07-18) Compute totalSamples once from WAV file size
+        // minus the 44-byte RIFF header. Used by the progress callback
+        // to report bytes-processed fraction (pcmSamples / totalSamples).
+        // The chunk loop fires the callback ~4 Hz on a typical 16 kHz
+        // mono file (8 KB chunks / 16 kHz / 2 bytes = ~250 ms per chunk);
+        // the worker throttles these to 1 Hz before publishing to the DB.
+        // Pre-converted to Float so the loop divides Float/Float — the
+        // Long/Float division overload chain is the overload-resolution
+        // ambiguity that Kotlin trips on if you mix the two directly.
+        val totalSamplesF: Float = run {
+            val wavBytes = (File(wavPath).length() - 44).coerceAtLeast(0L)
+            // bytes / 2 bytes-per-sample = samples
+            (wavBytes / 2L).toFloat()
+        }
         try {
             FileInputStream(wavPath).use { fis ->
                 // Skip 44-byte RIFF header (Vosk's recognizer reads
@@ -365,16 +448,49 @@ class VoskSpeechRecognizer @Inject constructor(
                     val shorts = ShortArray(shortLen)
                     val bb = java.nio.ByteBuffer.wrap(chunk, 0, n)
                         .order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                    for (i in 0 until shortLen) shorts[i] = bb.short
+                    for (i in 0 until shortLen) {
+                        val s = bb.short.toInt()
+                        shorts[i] = s.toShort()
+                        pcmSamples++
+                        if (s != 0) nonZeroSamples++
+                        val abs = if (s < 0) -s else s
+                        absSum += abs
+                        if (abs > peakAbs) peakAbs = abs
+                    }
                     if (recognizer.acceptWaveForm(shorts, shortLen)) {
                         appendSegmentFromResult(recognizer, segments)
                     }
+                    // (2026-07-18) Fire progress callback. Cheap (~ns);
+                    // the worker's throttleProgress drops most calls
+                    // anyway. coerceIn defends against off-by-one when
+                    // WAV file size is slightly larger than the actual
+                    // PCM payload (some encoders pad trailing bytes).
+                    progressCallback?.invoke(
+                        if (totalSamplesF > 0f) (pcmSamples.toFloat() / totalSamplesF).coerceIn(0f, 1f)
+                        else 0f,
+                    )
                 }
             }
             // Final un-committed segment.
             appendSegmentFromResult(recognizer, segments, final = true)
         } finally {
             try { recognizer.close() } catch (_: Throwable) {}
+        }
+
+        val rms = if (pcmSamples > 0) absSum.toDouble() / pcmSamples / 32768.0 else 0.0
+        Log.i(
+            TAG,
+            "PCM stats: samples=$pcmSamples nonZero=$nonZeroSamples peak=$peakAbs/32768 " +
+                "rms=%.5f segments=%d".format(rms, segments.size),
+        )
+        if (pcmSamples > 0 && nonZeroSamples.toDouble() / pcmSamples < 0.001) {
+            Log.w(
+                TAG,
+                "WAV is effectively silent (<0.1% non-zero samples, peak=$peakAbs). " +
+                    "Vosk returns 0 segments by design — the source MKV's audio track " +
+                    "may have decoded to zeros (broken stream, or non-audio track selected " +
+                    "by ffmpeg's default -i mapping)."
+            )
         }
         return segments
     }
@@ -388,6 +504,27 @@ class VoskSpeechRecognizer @Inject constructor(
      * Uses the first word's start and the last word's end as the
      * segment boundaries (Vosk returns per-word timestamps when
      * `setWords(true)` was called).
+     *
+     * (2026-07-18) **Critical bug fix**: when [Recognizer.setMaxAlternatives]
+     * is > 0 (we use 1), Vosk's result JSON is wrapped in an
+     * `alternatives[]` array:
+     *
+     *   { "alternatives": [ { "result": [...], "text": "...", "confidence": N }, ... ] }
+     *
+     * The OLD code did `obj.optString("text", "")` on the TOP level, which
+     * returned "" because top-level `text` doesn't exist in this shape.
+     * `appendSegmentFromResult` then early-returned → `segments` stayed
+     * empty → worker threw "未识别到任何语音" even though Vosk had
+     * actually transcribed the audio correctly. The bug only manifested
+     * after a recent Recognizer construction change introduced
+     * `setMaxAlternatives(1)` (it had been left at the default of 0
+     * before, which produces the simpler `{text, result}` shape).
+     *
+     * Fix: read from `alternatives[0]` when present, fall back to the
+     * top-level object when `alternatives` is absent (the
+     * `setMaxAlternatives(0)` shape). Both code paths in this file —
+     * the per-chunk `recognizer.result` and the EOF `recognizer.finalResult`
+     * — go through this helper so the same fix covers both.
      */
     private fun appendSegmentFromResult(
         recognizer: Recognizer,
@@ -396,9 +533,12 @@ class VoskSpeechRecognizer @Inject constructor(
     ) {
         val json = if (final) recognizer.finalResult else recognizer.result
         val obj = JSONObject(json)
-        val text = obj.optString("text", "").trim()
+        // (2026-07-18) unwrap alternatives[] when present.
+        val source = obj.optJSONArray("alternatives")?.optJSONObject(0) ?: obj
+
+        val text = source.optString("text", "").trim()
         if (text.isEmpty()) return
-        val words = obj.optJSONArray("result") ?: return
+        val words = source.optJSONArray("result") ?: return
         if (words.length() == 0) return
         val first = words.getJSONObject(0)
         val last = words.getJSONObject(words.length() - 1)

@@ -2,12 +2,12 @@
 
 > 一款面向国内英语学习者的 Android 原生应用，**完全离线运行**：本地 Vosk 语音识别 + 离线词典，无需任何 API key 或网络连接。
 
-[![Release v1.0](https://img.shields.io/badge/release-v1.0-7C3AED)](https://github.com/ryming213/EchoLing/releases/tag/v1.0)
+[![Release v1.1](https://img.shields.io/badge/release-v1.1-7C3AED)](https://github.com/ryming213/EchoLing/releases/tag/v1.1)
 [![Android](https://img.shields.io/badge/Android-26%2B-3DDC84)](#-开发环境)
 [![Kotlin](https://img.shields.io/badge/100%25-Kotlin-7F52FF)](#-技术栈)
 [![License](https://img.shields.io/badge/license-MIT-blue)](#-license)
 
-[📥 **下载 v1.0 APK (84.8 MB)**](https://github.com/ryming213/EchoLing/releases/download/v1.0/app-release.apk) · [🐛 反馈问题](https://github.com/ryming213/echoling/issues)
+[📥 **下载 v1.1 APK (84.8 MB)**](https://github.com/ryming213/EchoLing/releases/download/v1.1/app-release.apk) · [🐛 反馈问题](https://github.com/ryming213/echoling/issues)
 
 ---
 
@@ -176,7 +176,7 @@ Gradle 8.2+
 | Release keystore | `keystore/echoling.keystore`（不在 git 内） |
 | 别名 | `echoling` |
 | 签名算法 | v1 + v2 + v3 |
-| 版本号（v1.0） | versionCode = 1, versionName = "1.0" |
+| 版本号（v1.1） | versionCode = 2, versionName = "1.1" |
 
 发布流程：
 ```bash
@@ -246,6 +246,12 @@ iOS 对应项目：[EchoLing-iOS](https://github.com/ryming213/EchoLing-iOS) （
 ---
 
 ## 🏷️ 版本历史
+
+- **v1.1** (2026-07-18) — 修复自动字幕生成卡 0% / 0 segments
+  - **smart-exception AAR vendored** — ffmpeg-kit-min-gpl 缺 transitive 依赖 `com.arthenica:smart-exception-java:6.0`（Arthenica 2025 年初把 Maven Central 上的 AAR 清空），自己打包 2.4 KB 最小 AAR（仅 `registerRootPackage` + `getStackTraceString` 两个方法）
+  - **Vosk `alternatives[]` unwrap** — `Recognizer.setMaxAlternatives(N>0)` 把 result JSON 包成 `{"alternatives":[{text,result,confidence}]}`，旧代码读顶层 `text` 永远拿到 `""` → segments=0。改成读 `alternatives[0]`，BBC 新闻测试 17 段 → 88 SRT cue
+  - AutoTranscriptionWorker 每步加 Logcat 诊断 + 取消前 isStopped 守卫
+  - 移除 `setRequiresStorageNotLow` constraint（小米 Mi 11 CN 上 ENQUEUED 数分钟不启动）
 
 - **v1.0** (2026-07-15) — 首个 release APK 发布
   - 闪卡 per-category 进度持久化（Room v5）

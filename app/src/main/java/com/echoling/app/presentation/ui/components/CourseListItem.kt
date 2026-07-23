@@ -102,16 +102,13 @@ fun CourseListItem(
             label = stringResource(R.string.auto_subtitle_chip_pending),
             icon = Icons.Filled.HourglassEmpty,
             color = MaterialTheme.colorScheme.tertiary,
-            enabled = false,
-        )
-        AutoSubtitleStatus.IN_PROGRESS -> ChipData(
-            label = stringResource(
-                R.string.auto_subtitle_chip_in_progress,
-                course.autoSubtitleProgress,
-            ),
-            icon = Icons.Filled.HourglassEmpty,
-            color = MaterialTheme.colorScheme.tertiary,
-            enabled = false,
+            // (2026-07-18) PENDING chip is now clickable — tapping it
+            // kicks off the deferred transcription via the same
+            // `onRetryTranscription` callback the FAILED chip uses
+            // (which in turn calls `retryAutoSubtitle` on the VM).
+            // After the worker enqueues, the DB flips to IN_PROGRESS
+            // and this chip is replaced by the top progress line.
+            enabled = true,
         )
         AutoSubtitleStatus.FAILED -> ChipData(
             label = stringResource(R.string.auto_subtitle_chip_failed),
@@ -119,6 +116,11 @@ fun CourseListItem(
             color = MaterialTheme.colorScheme.error,
             enabled = true,
         )
+        // (2026-07-18) IN_PROGRESS no longer renders a chip — the
+        // top progress line + "字幕识别中…" caption below it replaces
+        // the funnel chip + "字幕识别中 X%" pair (the X% is dropped;
+        // the purple fill bar is now the sole progress indicator).
+        AutoSubtitleStatus.IN_PROGRESS,
         AutoSubtitleStatus.READY, null -> null
     }
 
@@ -147,8 +149,22 @@ fun CourseListItem(
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = animatedElevation),
     ) {
-        // IntrinsicSize.Min lets the accent bar fillMaxHeight() to the
-        // card's natural height without forcing a fixed dp value.
+        // (2026-07-18) IN_PROGRESS shows a thin progress line at the
+        // very top of the card instead of the funnel chip. Layout:
+        //   Column
+        //     ├── progress line (only when IN_PROGRESS)
+        //     └── original Row with accent bar + content + actions
+        // The progress line spans the full card width minus a 4dp
+        // horizontal inset so it doesn't overlap the 4dp accent bar.
+        // Label sits *below* the line (spec: "在长线条的左下角显示").
+        Column(modifier = Modifier.fillMaxWidth()) {
+            if (autoStatus == AutoSubtitleStatus.IN_PROGRESS) {
+                AutoSubtitleProgressLine(
+                    progress = course.autoSubtitleProgress,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                    labelPosition = ProgressLineLabelPosition.BelowLeft,
+                )
+            }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -297,6 +313,7 @@ fun CourseListItem(
                         modifier = Modifier.size(24.dp),
                     )
                 }
+            }
             }
         }
     }

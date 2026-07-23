@@ -1,8 +1,12 @@
 package com.echoling.app.presentation.ui.screens.me
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -21,6 +25,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
@@ -206,6 +211,10 @@ fun MeScreen(
                             "本地词典 - 长按取词离线查",
                             "单词收藏 - 一键保存复习",
                             "声音识别 - 自动识别复述的句子",
+                            // (2026-07-18) 导入音视频时可一键生成 SRT
+                            // 字幕, 详见 InstructionsScreen「三、自动
+                            // 生成字幕」。
+                            "字幕生成 - 自动识别音视频",
                         ),
                     )
                 },
@@ -396,7 +405,7 @@ private fun ContactCard(context: android.content.Context) {
         }
         Spacer(modifier = Modifier.height(12.dp))
         Text(
-            text = "If you have any questions or suggestions, please contact us:",
+            text = "If you have any questions or suggestions, please contact us by email or WeChat:",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -416,8 +425,31 @@ private fun ContactCard(context: android.content.Context) {
             Spacer(modifier = Modifier.padding(horizontal = 8.dp))
             Text("ryming213@sina.com")
         }
+        Spacer(modifier = Modifier.height(8.dp))
+        // (2026-07-18) WeChat contact. No universal intent can open
+        // the WeChat "add contact" flow from a third-party app, so the
+        // pattern is to copy the ID to clipboard + Toast confirmation.
+        // User pastes the ID into WeChat's 搜索 → 添加朋友 to find the
+        // contact. Button stays full-width and uses the same outlined
+        // style as the email button so the two reads as "two equally
+        // valid ways to reach us".
+        OutlinedButton(
+            onClick = {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("WeChat ID", WECHAT_ID))
+                Toast.makeText(context, "微信号已复制到剪贴板", Toast.LENGTH_SHORT).show()
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Icon(Icons.Default.Chat, contentDescription = null)
+            Spacer(modifier = Modifier.padding(horizontal = 8.dp))
+            Text("WeChat: $WECHAT_ID")
+        }
     }
 }
+
+private const val WECHAT_ID = "ryming213"
 
 private fun resolveVersion(pm: PackageManager, packageName: String): String {
     return try {

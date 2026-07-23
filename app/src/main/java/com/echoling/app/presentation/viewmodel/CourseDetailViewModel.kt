@@ -8,10 +8,11 @@ import com.echoling.app.domain.usecase.DeleteCourseUseCase
 import com.echoling.app.domain.usecase.GetCourseGroupsUseCase
 import com.echoling.app.transcription.AutoTranscriptionScheduler
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.io.File
 import javax.inject.Inject
@@ -47,31 +48,72 @@ class CourseDetailViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(CourseDetailUiState())
     val uiState: StateFlow<CourseDetailUiState> = _uiState.asStateFlow()
 
+    // (2026-07-18) Single in-flight loader job. Without this, a
+    // second `loadGroup(courseName)` call (e.g. screen recomposes
+    // with the same key) starts a second concurrent collect on the
+    // same flow — both fight to write `_uiState.value` and the room
+    // emission handler runs twice. Cancelling the previous job keeps
+    // exactly one collector alive.
+    private var loadGroupJob: Job? = null
+
     fun loadGroup(courseName: String) {
-        viewModelScope.launch {
+        loadGroupJob?.cancel()
+        loadGroupJob = viewModelScope.launch {
             _uiState.value = CourseDetailUiState(isLoading = true, courseName = courseName)
             try {
-                // Reuse the same flow that powers the home page so the
-                // grouping rules are guaranteed to agree. We snapshot
-                // the first emission — the screen will refresh on the
-                // next emit (e.g. after a delete) because the screen
-                // calls `loadGroup` again on returning from Practice.
-                val groups = getCourseGroups().first()
-                val match = groups.firstOrNull { it.courseName == courseName }
-                if (match == null) {
-                    _uiState.value = CourseDetailUiState(
-                        courseName = courseName,
-                        isLoading = false,
-                        error = "Group not found",
-                    )
-                } else {
-                    _uiState.value = CourseDetailUiState(
-                        courseName = courseName,
-                        courses = match.courses,
-                        isLoading = false,
-                        error = null,
-                    )
-                }
+                // (2026-07-18) Was `.first()` — bug: that captured a
+                // single snapshot, so any subsequent Room UPDATE to a
+                // course in this group (e.g. auto-subtitle worker
+                // transitioning PENDING → IN_PROGRESS → READY while
+                // the user sat on this screen) did NOT refresh the UI.
+                // The user had to navigate to Practice and back so the
+                // LaunchedEffect(courseName) re-launched this method.
+                // Switch to `collect` so the list stays live.
+                getCourseGroups()
+                    .map { groups -> groups.firstOrNull { it.courseName == courseName } }
+                    // Distinct-by-contents avoids redundant _uiState
+                    // writes when an unrelated course in another group
+                    // changes (e.g. a delete on a different group).
+                    // List<Course> is data-class — equality compares
+                    // every field, including autoSubtitleProgress which
+                    // ticks 1Hz during transcription. We deliberately
+                    // accept those mid-transcription re-renders so the
+                    // bar visually moves while the user is on this
+                    // screen.
+                    .collect { match ->
+                        if (match == null) {
+                            _uiState.value = CourseDetailUiState(
+                                courseName = courseName,
+                                isLoading = false,
+                                error = "Group not found",
+                            )
+                        } else {
+                            _uiState.value = CourseDetailUiState(
+                                courseName = courseName,
+                                courses = match.courses,
+                                isLoading = false,
+                                error = null,
+                            )
+                        }
+                    }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // (2026-07-18) loadGroupJob?.cancel() above throws
+                // CancellationException out of the previous .collect {}.
+                // CancellationException extends RuntimeException, so
+                // `catch (e: Exception)` happily swallows it — but
+                // doing so briefly sets _uiState.error to non-null
+                // ("StandaloneCoroutine was cancelled" or similar),
+                // which CourseDetailScreen's `uiState.error != null`
+                // branch renders as a red centered Text for one frame
+                // before the next collect clears it. Three user-visible
+                // triggers all hit this race:
+                //   1. Tap the PENDING/IN_PROGRESS chip → reload.
+                //   2. Delete a course from CourseDetailScreen.
+                //   3. Delete a course from CoursesScreen (which
+                //      pops back here and re-triggers loadGroup).
+                // Re-throw so structured concurrency propagates
+                // cancellation cleanly and the UI never flashes red.
+                throw e
             } catch (e: Exception) {
                 _uiState.value = CourseDetailUiState(
                     courseName = courseName,

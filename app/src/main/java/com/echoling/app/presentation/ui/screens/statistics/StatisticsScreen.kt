@@ -173,7 +173,12 @@ private fun StreakCard(streak: Int) {
                     // icon. Dropped one step to headlineSmall (24sp)
                     // so the streak number shares visual weight with
                     // the icon instead of dwarfing it.
-                    style = MaterialTheme.typography.headlineSmall,
+                    // (2026-07-22) §17.X: 用户反馈"上面 5 个卡片内的
+                    // 主字字体没有减小". 之前只改了卡片标题 (Last 7/30
+                    // Days), 漏了 StreakCard 这个主字. 再降一档到
+                    // titleLarge (22sp) — 与四个 StatCard 的 value
+                    // 视觉权重一致, 不再喧宾夺主.
+                    style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
                 Text(
@@ -219,7 +224,11 @@ private fun StatCard(
                 // one step to titleLarge (22sp) so each value still
                 // reads as the focal point but doesn't overpower the
                 // bodySmall (12sp) label underneath.
-                style = MaterialTheme.typography.titleLarge
+                // (2026-07-22) §17.X: 用户反馈"上面 5 个卡片内的主字
+                // 字体没有减小". 与 StreakCard 同步再降一档到
+                // titleMedium (16sp) — 整页所有卡片的主字统一在 16-22sp
+                // 区间, 不再出现 24sp 的 headlineSmall 打破视觉重量.
+                style = MaterialTheme.typography.titleMedium
             )
             Text(
                 text = label,
@@ -238,6 +247,14 @@ private fun WeeklyActivityChart(dailyStats: List<DailyStatistic>) {
         Column(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
+            // (2026-07-22) §17.X: 用户反馈"卡片内的 title 字体再变小一点".
+            // 整页只此两处卡片标题（"Last 7 Days" / "Last 30 Days"）.
+            // 此前用 titleMedium (16sp) 与顶部 PageHeader 的 titleMedium
+            // 重复, 视觉上像第二个 page header. 降到 titleSmall (14sp).
+            // (2026-07-23) §17.X: 用户第二轮反馈"下面两个卡片 title
+            // 字体改为和上面几个卡片的主字字体一致". 上面 4 个 StatCard
+            // 的主字是 titleMedium (16sp), 改回 titleMedium — 与 StatCard
+            // 的视觉重量一致, 不再像"小标签".
             Text(
                 text = "Last 7 Days",
                 style = MaterialTheme.typography.titleMedium
@@ -298,6 +315,11 @@ private fun MonthlyActivityChart(monthlyStats: List<DailyStatistic>) {
             ) {
                 Text(
                     text = "Last 30 Days",
+                    // (2026-07-22) §17.X: 用户反馈"卡片内的 title 字体再变小一点".
+                    // 与上方 "Last 7 Days" 同步降到 titleSmall (14sp), 见上方注释.
+                    // (2026-07-23) §17.X: 用户第二轮反馈"下面两个 title 字体
+                    // 改为和上面几个卡片的主字字体一致", 与 StatCard 的
+                    // titleMedium (16sp) 对齐, 见上方注释.
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(

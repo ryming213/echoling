@@ -1,7 +1,6 @@
 package com.echoling.app.transcription
 
 import android.content.Context
-import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
@@ -32,10 +31,17 @@ import javax.inject.Singleton
  * policy — different courses never conflict because the unique
  * name is `auto-subtitle-<courseId>`.
  *
- * **Why `setRequiresStorageNotLow(true)`:** the worker writes a
- * 30 MB/h temp WAV to `cacheDir/auto_subtitle/`. Under storage
- * pressure the OS may kill the worker mid-write; gating on
- * "not low" lets WorkManager defer until the user frees space.
+ * **Why no storage / battery constraints:** the worker writes a
+ * ~30 MB WAV to `cacheDir/auto_subtitle/` for the duration of one
+ * job and deletes it on cleanup. Earlier we gated on
+ * `setRequiresStorageNotLow(true)` to defer under storage
+ * pressure, but real-device testing on a 5-min video showed that
+ * on Xiaomi Mi 11 CN the "not low" threshold is conservative
+ * enough that the work could stay ENQUEUED for minutes — the
+ * user reported "0% stuck" while the worker never started. Drop
+ * the constraint: ffmpeg extraction handles a full disk by
+ * failing fast with an IOException (we surface it as FAILED
+ * chip), which is more honest than invisible deferral.
  */
 @Singleton
 class AutoTranscriptionScheduler @Inject constructor(
@@ -49,11 +55,6 @@ class AutoTranscriptionScheduler @Inject constructor(
                     AutoTranscriptionWorker.KEY_COURSE_ID to courseId,
                     AutoTranscriptionWorker.KEY_MEDIA_PATH to mediaPath,
                 )
-            )
-            .setConstraints(
-                Constraints.Builder()
-                    .setRequiresStorageNotLow(true)
-                    .build()
             )
             .addTag(WORK_TAG_GLOBAL)
             .addTag("$WORK_NAME_PREFIX-$courseId")

@@ -179,6 +179,16 @@ class ImportViewModel @Inject constructor(
      * background transcription. Returns immediately; the user lands
      * in the course list / detail with the status chip showing
      * "字幕识别中".
+     *
+     * (2026-07-18) Per user spec: "稍后转字幕" must NOT auto-start
+     * the worker. The course row is created with
+     * `autoSubtitleStatus = PENDING` and the worker is NOT enqueued.
+     * The CourseListItem shows the static "字幕待识别" chip
+     * indefinitely; the user taps it to kick off recognition via
+     * the PENDING chip's click handler →
+     * CourseDetailViewModel.retryAutoSubtitle →
+     * markTranscriptionStarted + enqueue. Until that tap, the
+     * chip acts as a manual trigger rather than a passive observer.
      */
     fun importCourseWithDeferredTranscription(
         courseName: String,
@@ -204,8 +214,8 @@ class ImportViewModel @Inject constructor(
                 return@launch
             }
             importCourseUseCase(course)
-            val mediaPath = course.audioUri ?: course.videoUri ?: return@launch
-            autoTranscriptionScheduler.enqueue(course.courseId, mediaPath)
+            // (2026-07-18) Intentionally NOT enqueuing the worker.
+            // See kdoc above.
             _importState.value = ImportState.SUCCESS
         }
     }

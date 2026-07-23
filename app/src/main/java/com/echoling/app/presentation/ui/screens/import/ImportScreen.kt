@@ -27,7 +27,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.echoling.app.R
+import com.echoling.app.presentation.ui.components.AutoSubtitleProgressLine
 import com.echoling.app.presentation.ui.components.PageHeader
+import com.echoling.app.presentation.ui.components.ProgressLineLabelPosition
 import com.echoling.app.presentation.viewmodel.AutoTranscriptionPhase
 import com.echoling.app.presentation.viewmodel.ImportState
 import com.echoling.app.presentation.viewmodel.ImportViewModel
@@ -542,18 +544,28 @@ private fun AutoSubtitleCard(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = stringResource(R.string.auto_subtitle_card_title),
-                    style = MaterialTheme.typography.titleSmall,
+                    text = "自动生成字幕",
+                    // titleMedium (16sp) — matches FileSelectorCard.title
+                    // "字幕文件（可选）" right above (line 478). Drops the
+                    // `✨` emoji that previously rendered as 3 yellow
+                    // sparkles; the purple Icons.Filled.AutoAwesome to
+                    // the left already carries the brand accent.
+                    style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
             }
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = stringResource(R.string.auto_subtitle_card_body),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(modifier = Modifier.height(16.dp))
+            // (2026-07-18) Removed the `auto_subtitle_card_body`
+            // explanatory paragraph beneath the title per user
+            // feedback. The card's purpose is already signaled by
+            // the icon + title row and the phase-driven content
+            // below; the verbose "未检测到字幕文件…完全离线无需联网"
+            // paragraph was visual noise on the import screen.
+            // 12dp spacer (instead of 8dp+16dp) keeps a clean visual
+            // gap between the title and whichever phase content
+            // follows (IDLE buttons, EXTRACTING… progress line, or
+            // COMPLETED checkmark) without re-introducing empty
+            // padding that would otherwise float the title at the top.
+            Spacer(modifier = Modifier.height(12.dp))
             when (phase) {
                 AutoTranscriptionPhase.IDLE -> {
                     Row(
@@ -583,22 +595,20 @@ private fun AutoSubtitleCard(
                 AutoTranscriptionPhase.EXTRACTING,
                 AutoTranscriptionPhase.TRANSCRIBING,
                 AutoTranscriptionPhase.SYNTHESIZING -> {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            text = stringResource(
-                                R.string.auto_subtitle_progress_format,
-                                progress,
-                            ),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                    }
+                    // Bottom-of-card progress line (spec: "在卡片的最底端…长度和卡片一样长…
+                    // 紫色颜色来跟踪识别的进度…在长先线的左上角显示：正在识别中…").
+                    // The 16dp Spacer above this branch already gives us
+                    // breathing room; the line's own top padding (8dp)
+                    // separates it from the body text.
+                    AutoSubtitleProgressLine(
+                        progress = progress,
+                        modifier = Modifier.padding(top = 8.dp),
+                        labelPosition = ProgressLineLabelPosition.AboveLeft,
+                        // ImportScreen keeps the original "正在识别中…"
+                        // caption (above the bar) — CourseListItem uses
+                        // the default "字幕识别中…" caption below.
+                        label = "正在识别中…",
+                    )
                 }
                 AutoTranscriptionPhase.COMPLETED -> {
                     Row(verticalAlignment = Alignment.CenterVertically) {

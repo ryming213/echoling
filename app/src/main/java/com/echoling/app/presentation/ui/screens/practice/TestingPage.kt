@@ -36,7 +36,6 @@ fun TestingPage(
     val testState by viewModel.testState.collectAsState()
     val sentenceStates by viewModel.sentenceStates.collectAsState()
     val sttTestState by viewModel.sttTestState.collectAsState()
-    val sttAmplitudeBars by viewModel.sttAmplitudeBars.collectAsState()
     // (2026-06-28) Per-page recording path. Collects only the
     // test-page path; speaking-page recordings are invisible to
     // this page so the 回放录音 button stays disabled when the
@@ -505,6 +504,7 @@ private fun TestingSubtitleCard(
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun TestingWordsFlowRow(
     words: List<String>,
@@ -512,78 +512,57 @@ private fun TestingWordsFlowRow(
     onWordClick: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Pre-calculate which words fit on each line
-    val lines = remember(words) {
-        val result = mutableListOf<List<Pair<Int, String>>>()
-        var currentLine = mutableListOf<Pair<Int, String>>()
-        var currentLineCharCount = 0
-        val maxCharsPerLine = 25 // Approximate characters per line
+    // (2026-07-18) §16.X: 切到 FlowRow, 移除 25 char 启发式.
+    //
+    // 旧版用 Column{Row{...}} 配合 hardcap `maxCharsPerLine = 25`
+    // 估算每行字数后手动切行 + Arrangement.Start + outer Column
+    // `CenterHorizontally`: 每行 chip 集合只占卡片宽度 ~67% 就换行
+    // (25 chars × ~8dp/char ≈ 200dp, 卡片可显示宽度 ~300dp),
+    // 用户看到"右边空着就换行"。
+    //
+    // FlowRow 让 chip + 空格 Text 自然流到卡片右边界再 wrap, 多余
+    // 行由容器宽度决定。新版本每行 chip 仍**视觉上居中**是次要
+    // 追求; 主要诉求是"行末不留大片空白"——FlowRow 的天然 wrap
+    // 让短行直接到尾部换行, 不再 column-Center 强行平衡。
+    //
+    // bodyLarge + height(28.dp) 沿用旧版 (允许 chip 比纯文字高
+    // 6dp 充当视觉 tap 目标). chip 之间用 Text(" ") bodyLarge
+    // 自然间距 ≈ 4.5dp, 接近旧 Spacer(4dp).
+    val style = MaterialTheme.typography.bodyLarge
+    val revealedColor = MaterialTheme.colorScheme.onSurface
 
-        words.forEachIndexed { index, word ->
-            val cleanWord = word.replace(Regex("[^\\w']"), "")
-            if (cleanWord.isNotEmpty()) {
-                if (currentLineCharCount + cleanWord.length > maxCharsPerLine && currentLine.isNotEmpty()) {
-                    result.add(currentLine.toList())
-                    currentLine = mutableListOf()
-                    currentLineCharCount = 0
-                }
-                currentLine.add(index to cleanWord)
-                currentLineCharCount += cleanWord.length + 1 // +1 for space
-            }
-        }
-        if (currentLine.isNotEmpty()) {
-            result.add(currentLine.toList())
-        }
-        result
-    }
-
-    Column(
+    FlowRow(
         modifier = modifier,
-        // (2026-07-10) §16.X: Center each line of words horizontally
-        // instead of left-aligning. Short lines used to look "concentrated
-        // on the left" with empty space on the right; centering makes
-        // each row read as a visually balanced unit regardless of word
-        // count per line.
-        horizontalAlignment = Alignment.CenterHorizontally
+        horizontalArrangement = Arrangement.Start,
+        verticalArrangement = Arrangement.Top,
     ) {
-        lines.forEach { lineWords ->
-            Row(
-                horizontalArrangement = Arrangement.Start,
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                lineWords.forEach { (index, cleanWord) ->
-                    val isRevealed = revealedWords.contains(index)
-
-                    if (isRevealed) {
-                        Text(
-                            text = cleanWord,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(vertical = 2.dp)
-                        )
-                    } else {
-                        // Hidden word block with fixed height matching word length width
-                        Box(
-                            modifier = Modifier
-                                .height(28.dp)
-                                .clip(RoundedCornerShape(4.dp))
+        words.forEachIndexed { index, word ->
+            if (index > 0) {
+                Text(" ", style = style, color = revealedColor)
+            }
+            val isRevealed = revealedWords.contains(index)
+            Box(
+                modifier = Modifier
+                    .height(28.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .then(
+                        if (!isRevealed) {
+                            Modifier
                                 .background(Color(0xFFE0E0E0))
                                 .clickable { onWordClick(index) }
-                                .padding(horizontal = 6.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = cleanWord,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = Color.Transparent
-                            )
+                        } else {
+                            Modifier
                         }
-                    }
-                    Spacer(modifier = Modifier.width(4.dp))
-                }
+                    )
+                    .padding(horizontal = 2.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = word,
+                    style = style,
+                    color = if (isRevealed) revealedColor else Color.Transparent,
+                )
             }
-            Spacer(modifier = Modifier.height(4.dp))
         }
     }
 }

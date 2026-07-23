@@ -61,17 +61,14 @@ fun TestResultCard(
                     style = MaterialTheme.typography.labelMedium,
                     color = contentColor
                 )
-                // (2026-06-28) Pass the per-word match flags
-                // through. The old call site only sent origWords /
-                // transWords, which forced WordChipsRow to compare
-                // position-wise and gave the user false-positives
-                // like "first word wrong → all subsequent words
-                // wrong". Now each chip colors itself from its
-                // own flag.
-                WordChipsRow(
-                    origWords = state.origWords,
+                // (2026-07-23) §17.X: 用户反馈"你说：标签下面有两句,
+                // 只保留你说的那一句". 旧 WordChipsRow 把 origWords +
+                // transWords 各渲染一行 (orig 行在 顶部"原句："已经有
+                // 完整原文文字, 重复). 现在只渲染 transWords 单行 —
+                // 用户说的词逐个 chip, 命中绿/多余黄. 顶部"原句："已
+                // 经是完整文本, 不需要再叠一遍 orig chips.
+                UserWordsChipsRow(
                     transWords = state.transWords,
-                    origMatched = state.origMatched,
                     transMatched = state.transMatched
                 )
                 Spacer(Modifier.height(8.dp))
@@ -81,6 +78,17 @@ fun TestResultCard(
                     style = MaterialTheme.typography.bodySmall
                 )
             } else if (state is SttTestState.Passed) {
+                // (2026-07-23) §17.X: 用户反馈"通过时只显示录音文字,
+                // 没有'你说：'标签". Failed 分支有"原句："/"你说："两个
+                // label, Passed 分支只有原句 + 一段裸文字, 不对称. 改成
+                // 两个 label 都打, 跟 Failed 一致; 通过时不需要逐词对
+                // 比 chips, 直接一段文字 (state.text 已经是 Vosk 识别出
+                // 来的、与原句一致的整段) 即可.
+                Text(
+                    "你说：",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = contentColor
+                )
                 Text(state.text, style = MaterialTheme.typography.bodyLarge)
             }
             Spacer(Modifier.height(12.dp))
@@ -104,7 +112,36 @@ fun TestResultCard(
 }
 
 /**
- * Renders the word-by-word comparison after a failed STT submission.
+ * Renders the user's transcribed words as a single row of chips
+ * under the "你说：" label after a failed STT submission.
+ *
+ * History:
+ *   - (2026-06-28) Originally `WordChipsRow` with two parallel
+ *     rows (orig + trans) using POSITION-INDEPENDENT match flags.
+ *     The orig row helped users see which orig word each trans
+ *     word aligned to.
+ *   - (2026-07-23) §17.X: User said "你说：标签下面有两句, 只保留
+ *     你说的那一句". The orig row is now redundant — the "原句："
+ *     plain-text section at the top already shows the full original
+ *     sentence. Duplicating it as chips under "你说：" was visual
+ *     noise. Renamed to `UserWordsChipsRow`, dropped the orig params.
+ *
+ * Color semantics for trans row:
+ *   - **Green (transMatched = true)**: this word aligned with a
+ *     counterpart in the original.
+ *   - **Yellow (transMatched = false)**: extra word the user said
+ *     that wasn't in the original at all. Deliberately NOT red —
+ *     saying an extra word is a milder error than saying a wrong
+ *     word.
+ *
+ * Missing-orig-word cases (STT dropped "to") are visible in the
+ * top "原句：" plain-text — the user can compare by eye. We don't
+ * render an orig chip row here.
+ *
+ * Legacy reference below — kept here for git-blame archaeology
+ * only. The (2026-06-28) flags are still relevant for understanding
+ * why the per-chip color is the sole signal (no slash separators,
+ * no orig/trans interleaving).
  *
  * (2026-06-28) Rewritten to use POSITION-INDEPENDENT match flags
  * (origMatched / transMatched) instead of position-by-position
@@ -141,47 +178,26 @@ fun TestResultCard(
  * (e.g. "red = wrong" for sentence completion states).
  */
 @Composable
-private fun WordChipsRow(
-    origWords: List<String>,
+private fun UserWordsChipsRow(
     transWords: List<String>,
-    origMatched: BooleanArray,
     transMatched: BooleanArray
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        // Row 1: original sentence. Green if matched, red if not.
-        if (origWords.isNotEmpty()) {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                origWords.forEachIndexed { i, word ->
-                    val matched = origMatched.getOrNull(i) == true
-                    WordChip(
-                        text = word,
-                        bg = if (matched) Color(0xFFC8E6C9) else Color(0xFFFFCDD2)
-                    )
-                }
-            }
-        }
-        // Row 2: user's transcription. Green if matched, yellow
-        // if "extra" (not in the original at all). We deliberately
-        // do NOT use red here — the user said an extra word, not
-        // a wrong one, so the visual cue should be milder than
-        // "you got this wrong".
-        if (transWords.isNotEmpty()) {
-            Spacer(Modifier.height(6.dp))
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                transWords.forEachIndexed { j, word ->
-                    val matched = transMatched.getOrNull(j) == true
-                    WordChip(
-                        text = word,
-                        bg = if (matched) Color(0xFFC8E6C9) else Color(0xFFFFF9C4)
-                    )
-                }
-            }
+    // (2026-07-23) §17.X: 用户反馈"你说：标签下面有两句". 旧
+    // WordChipsRow 把 origWords + transWords 各渲染一行, 但 orig 行
+    // 已经在顶部"原句："的纯文本里显示完整原句了, 重复. 现在只渲染
+    // 用户说的 transWords 单行 —— 命中绿/多余黄 (yellow 不是 red:
+    // 多说一个词比说错一个词的视觉强度应该更弱).
+    if (transWords.isEmpty()) return
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        transWords.forEachIndexed { j, word ->
+            val matched = transMatched.getOrNull(j) == true
+            WordChip(
+                text = word,
+                bg = if (matched) Color(0xFFC8E6C9) else Color(0xFFFFF9C4)
+            )
         }
     }
 }

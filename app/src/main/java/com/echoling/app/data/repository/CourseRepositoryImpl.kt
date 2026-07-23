@@ -25,6 +25,13 @@ class CourseRepositoryImpl @Inject constructor(
         return courseDao.getCourseById(courseId)?.toDomain()
     }
 
+    // (2026-07-18) See CourseDao.observeCourseById kdoc — Flow-based
+    // single-row lookup so the Practice screen can react to background
+    // worker completion (subtitleUri flip null → <path>).
+    override fun observeCourseById(courseId: String): Flow<Course?> {
+        return courseDao.observeCourseById(courseId).map { it?.toDomain() }
+    }
+
     override suspend fun insertCourse(course: Course) {
         courseDao.insertCourse(course.toEntity())
     }

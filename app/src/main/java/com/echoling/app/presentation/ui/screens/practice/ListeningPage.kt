@@ -17,6 +17,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.echoling.app.player.subtitle.Subtitle
@@ -322,6 +324,11 @@ private fun ListeningSubtitleListItem(
     val words = subtitle.contentEn.split(Regex("\\s+")).filter { it.isNotEmpty() }
     val cnText = subtitle.contentCn
 
+    // (2026-07-18) §16.X fix9: rememberUpdatedState 让 playback tick
+    // 期间每次重组件的 onClick 新闭包不再让 gesture detector 重启.
+    // 详见 ListeningHiddenWordsFlowRow 的同号注释.
+    val currentOnClick by rememberUpdatedState(onClick)
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -333,8 +340,10 @@ private fun ListeningSubtitleListItem(
             // taps that land on whitespace / Chinese / the index
             // number / the active indicator — taps on word Boxes are
             // handled by the words themselves (see below).
-            .pointerInput(onClick) {
-                detectTapGestures(onTap = { onClick() })
+            // §16.X fix9: keys = Unit (永远稳定), callback 走
+            // currentOnClick (永远拿到最新闭包但不重启 detector).
+            .pointerInput(Unit) {
+                detectTapGestures(onTap = { currentOnClick() })
             },
         shape = RoundedCornerShape(8.dp),
         color = if (isActive)
@@ -447,10 +456,33 @@ private fun ListeningVisibleSubtitleText(
     val style = MaterialTheme.typography.bodyMedium
     val color = MaterialTheme.colorScheme.onSurface
 
+    // (2026-07-18) §16.X fix9: rememberUpdatedState 让 playback tick
+    // 期间每次重组件的 onSentenceClick / onWordLongPress 新闭包不再让
+    // gesture detector 重启. keys 仅留 stable 的 clean (per-token String).
+    // 详见 ListeningHiddenWordsFlowRow 的同号注释.
+    val currentOnSentenceClick by rememberUpdatedState(onSentenceClick)
+    val currentOnWordLongPress by rememberUpdatedState(onWordLongPress)
+
     androidx.compose.foundation.layout.FlowRow(
         modifier = modifier,
         horizontalArrangement = Arrangement.Start,
-        verticalArrangement = Arrangement.Top,
+        // (2026-07-18) §16.X fix5: 显示态 FlowRow 加 2dp 行间隙, 与
+        // 覆盖态对齐.
+        //
+        // 用户 2026-07-18 (第二轮): "我的要求是: 句子在覆盖和显示的时候,
+        // 句子的长度和上下之间的间隔都要保持一致".
+        //
+        // 当前状态:
+        //  chip per-row 几何 — 隐藏与显示对齐 (fix3: vertical 2dp → 0dp,
+        //    horizontal=2dp, 同)
+        //  chip 之间的横向间隔 — 隐藏与显示对齐 (FlowRow + Text(" ")
+        //    自然间距, 同)
+        //  行间净间隙 — 隐藏态 spacedBy(2.dp), 显示态 Arrangement.Top
+        //    (0dp), 这一项不一致.
+        //
+        // 显示态加 spacedBy(2.dp) 后, 多行句子的两态行节距完全一致
+        // = text_height + 2dp × (n-1) dp.
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         if (showEn) {
             for (token in tokens) {
@@ -481,13 +513,24 @@ private fun ListeningVisibleSubtitleText(
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))
-                                .pointerInput(onSentenceClick, clean) {
+                                // §16.X fix9: keys = Unit (永远稳定),
+                                // 回调走 currentOnSentenceClick /
+                                // currentOnWordLongPress (永远拿到最新闭
+                                // 包但不重启 detector).
+                                .pointerInput(Unit) {
                                     detectTapGestures(
-                                        onTap = { onSentenceClick() },
-                                        onLongPress = { onWordLongPress(clean) },
+                                        onTap = { currentOnSentenceClick() },
+                                        onLongPress = { currentOnWordLongPress(clean) },
                                     )
-                                }
-                                .padding(horizontal = 2.dp, vertical = 2.dp),
+                                },
+                            // (2026-07-18) §16.X fix8: 去掉 padding(horizontal=2.dp).
+                            //
+                            // 上一步 (§16.X fix7) 把覆盖态改成"灰块宽度 = 该词
+                            // 自然宽", 显示态却仍保留 padding(2dp) → 每词多
+                            // 4dp → 10 词句长 40dp 偏移, 用户报"句子长度还会变".
+                            //
+                            // 拿掉 padding 后, Box wrap-to-content (Text 自
+                            // 然宽), 与覆盖态灰块尺寸一一对应.
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(text = token, style = style, color = color)
@@ -499,6 +542,7 @@ private fun ListeningVisibleSubtitleText(
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun ListeningHiddenWordsFlowRow(
     words: List<String>,
@@ -507,54 +551,113 @@ private fun ListeningHiddenWordsFlowRow(
     onSentenceClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Pre-calculate which words fit on each line
-    val lines = remember(words) {
-        val result = mutableListOf<List<Pair<Int, String>>>()
-        var currentLine = mutableListOf<Pair<Int, String>>()
-        var currentLineCharCount = 0
-        val maxCharsPerLine = 25
+    // (2026-07-18) §16.X fix7: 根本性重构 — 隐藏态改成"灰块等于
+    // 词的天然宽度",不再用"透明文字包进灰底 box" 这条路。
+    //
+    // 旧方案 (`Box(透明文字, padding 2dp) + 灰底`):
+    //  chip Box 宽度 = 文字宽度 + 4dp (horizontal padding ×2)
+    //  句子总宽度 = Σ (词宽 + 4dp) + Σ 空格 Text ≈ "词自然宽"
+    //    × 1.05 倍, 比显示态纯文字稍宽. 累加 5+ 词后视觉
+    //    偏移明显, 用户报"单词之间的间隔太大了" (本节反馈).
+    //
+    // 新方案 (`Box(灰底, 尺寸=文字自然宽 × 行高)`):
+    //  chip Box 宽度 = 该词 Text 在 measurer 上量出的精确宽度,
+    //    高度 = 全行最长高度 (各词 max ascender+descender).
+    //  灰块精确等于"假如那个词是文字时会占的空间". 没 padding,
+    //    没 chip 撑开。
+    //  行内空白仍是 Text(" ") bodyMedium, 与显示态共用同一布局。
+    //
+    // 用户的核心提议 (本节):
+    //  "单词隐藏时时没有单词的, 只出现了灰色的块,
+    //   根据单词长短的不一样, 这个灰色的块也是长短不一样"
+    //
+    // 实现方式 — TextMeasurer + 缓存: 首次渲染时用 remember 量
+    // 出每个词的 (px.width, px.height), 缓存到 wordSizes.
+    // 切换 reveal/hide 不重算 (style + words 未变). density 变化
+    // (旋转屏幕) 让 remember 自动 invalidate.
+    val style = MaterialTheme.typography.bodyMedium
+    val revealedColor = MaterialTheme.colorScheme.onSurface
+    val grayBlock = Color(0xFFE0E0E0)
 
-        words.forEachIndexed { index, word ->
-            val cleanWord = word.replace(Regex("[^\\w']"), "")
-            if (cleanWord.isNotEmpty()) {
-                if (currentLineCharCount + cleanWord.length > maxCharsPerLine && currentLine.isNotEmpty()) {
-                    result.add(currentLine.toList())
-                    currentLine = mutableListOf()
-                    currentLineCharCount = 0
-                }
-                currentLine.add(index to cleanWord)
-                currentLineCharCount += cleanWord.length + 1
-            }
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+
+    // 量每个词的自然像素宽 + 自然像素高. height 取整行 max 以容纳
+    // descender. cached on words + style (cache hit on every reveal
+    // toggle).
+    val (wordWidthsDp, rowHeightDp) = remember(words, style) {
+        val sizes = words.map { word -> measurer.measure(word, style).size }
+        val widthsDp = sizes.map { with(density) { it.width.toDp() } }
+        val heightDp = with(density) {
+            sizes.maxOf { it.height }.toDp()
         }
-        if (currentLine.isNotEmpty()) {
-            result.add(currentLine.toList())
-        }
-        result
+        widthsDp to heightDp
     }
 
-    Column(
+    FlowRow(
         modifier = modifier,
-        horizontalAlignment = Alignment.Start
+        horizontalArrangement = Arrangement.Start,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        lines.forEach { lineWords ->
-            Row(
-                horizontalArrangement = Arrangement.Start,
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                lineWords.forEach { (index, cleanWord) ->
-                    val isRevealed = revealedWords.contains(index)
+        // (2026-07-18) §16.X fix9: rememberUpdatedState 让 playback
+        // tick (每 ~50ms) 期间每次重组件的 onSentenceClick /
+        // onWordLongPress 新闭包不再让 gesture detector 重启.
+        //
+        // 现象: 长按 500ms 需要到达, 但每次 emit playbackState 都触发
+        // ListeningSubtitleListItem 重组, itemsIndexed 的 lambda 创建
+        // 新 `() -> viewModel.playSubtitleOnce(subtitle)` 闭包, 旧
+        // pointerInput(index, onSentenceClick) 因 key 变化重启 gesture
+        // detector — detectTapGestures 永远等不到 500ms 触发 onLongPress.
+        // (clickable / onClick 在毫秒级完成, 一般能抢在下一次 tick 前完事,
+        // 所以单击仍工作.)
+        //
+        // 修法: keys 仅保留 stable 的 index (per-word, in forEachIndexed
+        // 永远稳定), 回调走 State-backed delegate, 永远拿到最新闭包但
+        // 不再因闭包变化重启 detector. 播放中长按 500ms 即可触发.
+        val currentOnSentenceClickHidden by rememberUpdatedState(onSentenceClick)
+        val currentOnWordLongPressHidden by rememberUpdatedState(onWordLongPress)
 
-                    HiddenWordBlock(
-                        word = cleanWord,
-                        isRevealed = isRevealed,
-                        onClick = onSentenceClick,
-                        onLongPress = { onWordLongPress(index) }
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                }
+        words.forEachIndexed { index, word ->
+            if (index > 0) {
+                // 词间空格, 仅作空格 Token — 与 [ListeningVisibleSubtitleText]
+                // 完全一致。
+                Text(" ", style = style, color = revealedColor)
             }
-            Spacer(modifier = Modifier.height(4.dp))
+            val isRevealed = revealedWords.contains(index)
+            if (isRevealed) {
+                // 显示态: 纯文字, 与显示路径共用 Text 自然尺寸.
+                // 父 [Surface] 的 detectTapGestures 兜底 onTap (播句),
+                // 这里再叠一个 pointerInput 拿 long-press (翻译).
+                // §16.X fix9: keys = index (stable per-word).
+                Box(
+                    modifier = Modifier
+                        .pointerInput(index) {
+                            detectTapGestures(
+                                onTap = { currentOnSentenceClickHidden() },
+                                onLongPress = { currentOnWordLongPressHidden(index) },
+                            )
+                        },
+                ) {
+                    Text(text = word, style = style, color = revealedColor)
+                }
+            } else {
+                // 隐藏态: 灰块, Box 尺寸 = 该词自然宽 × 行高. 灰底
+                // 直接 size, 无 padding. tap/long-press 行为同 revealed,
+                // 只是 Box 自身成为命中目标.
+                // §16.X fix9: keys = index (stable per-word).
+                Box(
+                    modifier = Modifier
+                        .size(width = wordWidthsDp[index], height = rowHeightDp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(grayBlock)
+                        .pointerInput(index) {
+                            detectTapGestures(
+                                onTap = { currentOnSentenceClickHidden() },
+                                onLongPress = { currentOnWordLongPressHidden(index) },
+                            )
+                        },
+                )
+            }
         }
     }
 }
@@ -566,6 +669,16 @@ private fun HiddenWordBlock(
     onClick: () -> Unit,
     onLongPress: () -> Unit
 ) {
+    // (2026-07-18) 间距对齐显示路径:padding 6dp → 2dp。
+    //
+    // 整句覆盖路径 (this fn) 的 chip-to-chip 间距原本是
+    //   Box(6dp) + Spacer(4dp) + Box(6dp) = 16dp
+    // 显示路径 [ListeningVisibleSubtitleText] 的 chip-to-chip 间距是
+    //   Box(2dp) + Text(" ")自然宽度(~3.6dp) + Box(2dp) = ~7.6dp
+    // 两条路径差 8.4dp, 用户切到整句覆盖时整行单词瞬间向右撑开 8dp。
+    // 改为 2dp × 2dp + 4dp Spacer = 8dp, 与显示路径 ~7.6dp 肉眼无差。
+    // 两个分支(revealed / hidden)保持相同 padding, 保证用户长按揭示
+    // 单个单词时该 chip 不会跳宽。
     if (isRevealed) {
         // §12.34: even when revealed, tap on a word plays the
         // sentence. §12.34a: pointerInput + detectTapGestures
@@ -580,7 +693,7 @@ private fun HiddenWordBlock(
                         onLongPress = { onLongPress() },
                     )
                 }
-                .padding(horizontal = 6.dp, vertical = 2.dp),
+                .padding(horizontal = 2.dp, vertical = 2.dp),
             contentAlignment = Alignment.Center,
         ) {
             Text(
@@ -602,7 +715,7 @@ private fun HiddenWordBlock(
                         onLongPress = { onLongPress() },
                     )
                 }
-                .padding(horizontal = 6.dp, vertical = 2.dp),
+                .padding(horizontal = 2.dp, vertical = 2.dp),
             contentAlignment = Alignment.Center
         ) {
             Text(

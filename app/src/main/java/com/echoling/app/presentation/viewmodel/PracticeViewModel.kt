@@ -346,7 +346,9 @@ class PracticeViewModel @Inject constructor(
     private val _sttTestState = MutableStateFlow<SttTestState>(SttTestState.Idle)
     val sttTestState: StateFlow<SttTestState> = _sttTestState.asStateFlow()
 
-    // 5 random amplitude bars for v1 recording overlay animation.
+    // 录音中波形动画驱动数据 (5 根 amplitude bar). 假数据 + Math.random
+    // 抖动, 让用户看到 bar 在录音时上下起伏. 真实 peak 接入属于
+    // 后续优化, 不在本批回退.
     private val _sttAmplitudeBars = MutableStateFlow(List(5) { 0.4f })
     val sttAmplitudeBars: StateFlow<List<Float>> = _sttAmplitudeBars.asStateFlow()
 
@@ -812,6 +814,65 @@ class PracticeViewModel @Inject constructor(
                 e.printStackTrace()
             }
         }
+
+        // (2026-07-18) Bug fix: loadCourse() resolves subtitle readiness
+        // ONCE on entry. If the user lands here while the auto-subtitle
+        // worker is still running (deferred-path tap, immediate-path
+        // mid-transcription tap, manual return from Import mid-progress),
+        // subtitleLoadState is set to NotReady and the SubtitleNotReadyView
+        // shows. When the worker completes minutes later, status flips
+        // PENDING/IN_PROGRESS → READY and subtitleUri gets written — but
+        // the one-shot resolution above never re-runs, so the empty view
+        // stays stuck on screen even though the subtitle is on disk.
+        //
+        // observeCourseById emits a new Course on every UPDATE to this
+        // row (Room's invalidation tracker). We watch for two
+        // transitions out of NotReady:
+        //  - subtitleUri flips non-null → worker finished, set up media
+        //    + parse SRT exactly the same way the initial Ready path does.
+        //  - status flips FAILED → surface the worker error message.
+        // Other emissions (PENDING → IN_PROGRESS, progress ticking) are
+        // ignored — they don't change subtitle readiness.
+        viewModelScope.launch {
+            courseRepository.observeCourseById(courseId).collect { course ->
+                if (course == null) return@collect
+                val current = _subtitleLoadState.value
+                if (current !is LoadSubtitleState.NotReady) return@collect
+                val freshSubtitle = course.subtitleUri
+                val freshStatus = course.autoSubtitleStatus
+                when {
+                    freshSubtitle != null &&
+                        File(freshSubtitle).let { it.exists() && it.length() > 0 } -> {
+                        _subtitleLoadState.value =
+                            LoadSubtitleState.Ready(freshSubtitle)
+                        // Mirror the initial Ready branch: set up the
+                        // media player with the new subtitle URI, parse
+                        // the SRT, then seed a save so the Continue
+                        // Learning card picks up the course even if the
+                        // user backs out before tapping play.
+                        val videoUri = course.videoUri
+                        val audioUri = course.audioUri
+                        if (course.hasVideoContent() && !videoUri.isNullOrBlank()) {
+                            loadVideo(videoUri, freshSubtitle, courseId)
+                        } else if (course.hasAudioContent() && !audioUri.isNullOrBlank()) {
+                            loadMedia(audioUri, freshSubtitle, courseId)
+                        }
+                        saveProgress()
+                    }
+                    freshStatus == AutoSubtitleStatus.FAILED -> {
+                        _subtitleLoadState.value = LoadSubtitleState.LoadError(
+                            course.autoSubtitleErrorMessage ?: "字幕识别失败",
+                        )
+                    }
+                    else -> {
+                        // Still PENDING / IN_PROGRESS with no SRT yet —
+                        // keep waiting. CourseListItem in the meantime
+                        // renders the top progress line + "字幕识别中…"
+                        // caption so the user has a separate visual cue.
+                    }
+                }
+            }
+        }
     }
 
     fun loadMedia(audioUri: String, subtitleUri: String?, courseId: String = "") {
@@ -1167,6 +1228,11 @@ class PracticeViewModel @Inject constructor(
     fun playSubtitleOnce(subtitle: Subtitle) {
         val index = _subtitles.value.indexOf(subtitle)
         android.util.Log.d("PracticeViewModel", "playSubtitleOnce: subtitle.index=${subtitle.index}, listIndex=$index, total=${_subtitles.value.size}")
+        // (2026-07-23) §17.X: 用户反馈"回放录音过程中点击播放, 录音回放
+        // 声音仍继续播". 测试页 onPlayAudio → playSubtitleOnce(), 与
+        // startRecording/startStt 同理, 句子 TTS 启动时同步停掉回放录音
+        // MediaPlayer — 用户听到的不是 TTS + 回放混在一起的怪声.
+        stopPlayingRecording()
         // §12.36: set the single-play fields BEFORE starting playback
         // and bypass play()'s clear-state contract. The previous
         // design (see git history for §12.34) called play() between
@@ -1415,6 +1481,18 @@ class PracticeViewModel @Inject constructor(
 
     // Voice recording functions for 跟读 (shadowing)
     fun startRecording(): Boolean {
+        // (2026-07-22) §17.X: 用户按下精听页话筒键, 立即停止正在播
+        // 放的句子 TTS. 旧逻辑只 stopPlayingRecording() — 这是停
+        // "我的录音回放" (recordings/playback), 不是停句子的 TTS 播放.
+        // 边录边放会让耳机里 TTS + 麦克风录入 互相打架 (Vosk / 跟读
+        // 评分都会被原句污染). pause() 同时清掉 singleSubtitleIndex
+        // 和 skipTargetListIndex, 避免录音结束后 single-play 自动
+        // 续播下一句.
+        //
+        // pause() 是幂等的 (paused 上再 pause 等于无操作) + 兜底
+        // saveProgress, 跟 playSubtitleOnce / 当前句 TTS 状态无关,
+        // 任何 caller (UI onPress / 权限回调) 都自动受益.
+        pause()
         stopPlayingRecording()
         return try {
             voiceRecorder.startRecording()
@@ -1477,6 +1555,18 @@ class PracticeViewModel @Inject constructor(
      */
     fun startStt() {
         if (_sttTestState.value is SttTestState.Listening) return
+        // (2026-07-22) §17.X: 同 startRecording() — 测试页按下话筒键
+        // 立即停止正在播放的句子 TTS. 旧逻辑让 TTS + 麦克风录入并行
+        // 跑, Vosk 听到的音频会被原句污染, 测试结果不稳定. pause()
+        // 清 singleSubtitleIndex 避免录音松手后 single-play 自动续播
+        // 下一句.
+        pause()
+        // (2026-07-23) §17.X: 用户反馈"录音回放过程中按话筒开始新录音,
+        // 回放声音仍继续播". pause() 停的是句子的 TTS 播放, 但回放录音
+        // 走的是另一个 MediaPlayer (PracticeViewModel.mediaPlayer), 不
+        // 受 pause() 控制. 在 startStt() 入口同步 stop, 让麦克风录入
+        // 不被自己的回放音频污染 — 和 startRecording() 一致.
+        stopPlayingRecording()
         sttPressStartTimeMs = System.currentTimeMillis()
         sttWaitJob?.cancel()
         sttWaitJob = null
@@ -1686,7 +1776,11 @@ class PracticeViewModel @Inject constructor(
                 (_sttTestState.value as? SttTestState.Listening)?.let {
                     _sttTestState.value = it.copy(elapsedMs = elapsed)
                 }
-                _sttAmplitudeBars.value = List(5) { (Math.random().toFloat() * 0.7f + 0.3f) }
+                // 假数据驱动 5 根 amplitude bar 上下起伏, Math.random()
+                // 给一个轻量的随机抖动让动画看起来"活的"
+                _sttAmplitudeBars.value = List(5) {
+                    (Math.random() * 0.7 + 0.3).toFloat()
+                }
                 delay(100)
             }
         }

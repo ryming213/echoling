@@ -21,8 +21,8 @@ android {
         applicationId = "com.echoling.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -196,11 +196,23 @@ dependencies {
     // min-gpl flavor ships 10 native libs: libavcodec, libavdevice,
     // libavfilter, libavformat, libavutil, libswresample, libswscale,
     // libffmpegkit, libffmpegkit_abidetect, libc++_shared × 4 ABIs) and
-    // referenced via files(...) — no POM metadata, but the AAR is
-    // self-contained (no transitive Maven deps). Native .so files are
-    // 16 KB-aligned by the existing patchNativeLibsFor16KB hook
-    // (CLAUDE.md §12.33).
+    // referenced via files(...) because there's no POM metadata. Native
+    // .so files are 16 KB-aligned by the existing patchNativeLibsFor16KB
+    // hook (CLAUDE.md §12.33).
+    //
+    // (2026-07-18) The min-gpl AAR has a transitive runtime dep on
+    // `com.arthenica.smartexception.java.Exceptions` (called from
+    // FFmpegKitConfig.<clinit> and FFmpegSession.create / .fail). Arthenica
+    // wiped that AAR from Maven Central along with ffmpeg-kit, and the
+    // smart-exception-java GitHub repo is also unreachable. We vendor a
+    // 2.4 KB minimal AAR re-implementing just the two methods that
+    // ffmpeg-kit actually calls — see docs/superpowers/specs/2026-07-18-
+    // smart-exception-java-vendoring.md for the reverse-engineered API
+    // surface. Without this, the very first FFmpegKit.executeWithArguments
+    // call throws java.lang.NoClassDefFoundError and AutoTranscriptionWorker
+    // fails at progress=0% with the chip stuck.
     implementation(files("libs/ffmpeg-kit-min-gpl-6.0-2.aar"))
+    implementation(files("libs/ffmpeg-kit-smart-exception-java-6.0.aar"))
 
     // WorkManager 2.9.1 — required for AutoTranscriptionWorker (spec §6).
     // HiltWorkerFactory wiring is done in EchoLingApplication.kt (Task 4).

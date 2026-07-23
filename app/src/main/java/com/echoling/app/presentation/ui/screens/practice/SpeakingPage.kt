@@ -238,13 +238,14 @@ fun SpeakingPage(
 
             // RedRecordCircle anchor — (2026-07-10) §12.42 changed
             // from heightIn(min = 48.dp) + Alignment.Center to
-            // heightIn(min = 48.dp, max = 140.dp) + Alignment.BottomCenter,
+            // heightIn(min = 48.dp, max = 100.dp) + Alignment.BottomCenter
+            // (2026-07-18: 140 → 100dp 与 RedRecordCircle 默认值同步),
             // and the previously-following RecordingPlaybackCard was
             // removed (see below). Combined effect: when recording,
-            // the 140dp circle is gravity-aligned to the BOTTOM of
+            // the 100dp circle is gravity-aligned to the BOTTOM of
             // this slot, sitting visually adjacent to the
             // SpeakingControlBar below; when not recording the slot
-            // falls back to 48dp minimum (no empty 140dp hole). The
+            // falls back to 48dp minimum (no empty 100dp hole). The
             // Removed-by-§12.42 RecordingPlaybackCard used to eat
             // ~80dp of vertical space + a duplicate play button; its
             // deletion makes the Speaking 5-button bar's 4th "Play
@@ -252,7 +253,11 @@ fun SpeakingPage(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 48.dp, max = 140.dp),
+                    // (2026-07-18) max 140 → 100 与
+                    // RecordingOverlay.RedRecordCircle 的新默认值
+                    // (140 → 100dp) 同步；slot 跟着圆圈缩小, 避免留
+                    // 40dp 空隙把控制条往下挤。
+                    .heightIn(min = 48.dp, max = 100.dp),
                 contentAlignment = Alignment.BottomCenter
             ) {
                 if (recordingState == RecordingState.RECORDING) {
@@ -332,17 +337,20 @@ private fun SpeakingSubtitleCard(
     modifier: Modifier = Modifier
 ) {
     val words = subtitle.contentEn.split(Regex("\\s+")).filter { it.isNotEmpty() }
-    // Calculate max word length for uniform block width
-    val maxWordLength = words.maxOfOrNull { it.replace(Regex("[^\\w']"), "").length } ?: 0
+    // (2026-07-18) 移除 maxWordLength 局部变量 + 参数:FlowRow 自然按内容宽度排,
+    // 旧版"统一 chip 宽度"目标在 chip 实际宽度跟着内容走时并未生效.
 
     Card(
         modifier = modifier,
         shape = RoundedCornerShape(16.dp),
+        // (2026-07-23) §17.X: completed 句子不再用浅紫 primaryContainer
+        // 背景 — 用户反馈"已完成时卡片背景色看起来怪", 与普通句子同色
+        // (`surface`). 完成状态由右上角的 ✔ 圆圈 + 句子编号旁的紫色文字
+        // 一起表达, 不需要再叠背景色; 否则浅紫把整张卡片"染"得像
+        // 选中态, 跟正常的 primary 选中态 (dropdown cell 紫色) 也
+        // 视觉冲突.
         colors = CardDefaults.cardColors(
-            containerColor = if (isCompleted)
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-            else
-                MaterialTheme.colorScheme.surface
+            containerColor = MaterialTheme.colorScheme.surface
         )
     ) {
         // (2026-07-10) §12.41: Outer Column is **non-scrollable** so the
@@ -423,7 +431,6 @@ private fun SpeakingSubtitleCard(
                 // Words row - wrap words into multiple lines
                 SpeakingWordsFlowRow(
                     words = words,
-                    maxWordLength = maxWordLength,
                     revealedWords = revealedWords,
                     onWordClick = onWordReveal,
                     onWordLongClick = onWordLongClick,
@@ -444,95 +451,71 @@ private fun SpeakingSubtitleCard(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun SpeakingWordsFlowRow(
     words: List<String>,
-    maxWordLength: Int,
     revealedWords: Set<Int>,
     onWordClick: (Int) -> Unit,
     onWordLongClick: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Pre-calculate which words fit on each line
-    val lines = remember(words, maxWordLength) {
-        val result = mutableListOf<List<Pair<Int, String>>>()
-        var currentLine = mutableListOf<Pair<Int, String>>()
-        var currentLineCharCount = 0
-        val maxCharsPerLine = 25 // Approximate characters per line
+    // (2026-07-18) §16.X: 切到 FlowRow, 移除 25 char 启发式 + 移除
+    // maxWordLength 入参。
+    //
+    // 旧版用 Column{Row{...}} 配合 hardcap `maxCharsPerLine = 25`
+    // (≈ ~200dp / 行) 估算每行字数后手动切行 + Arrangement.Start
+    // 左对齐: 卡片可显示宽度 ~300dp 时, 每行 chip 集合只占 ~67%
+    // 就换行, 用户看到"右边空着就换行"。maxWordLength 本是给"统一
+    // chip 宽度"用, 但 revealed/hidden 两个分支用不同字体, chip
+    // 实际宽度跟着内容走, maxWordLength 没起作用。
+    //
+    // FlowRow 让 chip + 空格 Text 自然流到卡片右边界再 wrap,
+    // 与 ListeningPage 同算法, 覆盖 / 显示两状态不再错位。chip
+    // 之间用 Text(" ") bodyMedium 替代 Spacer(4dp), 自然间距
+    // ≈ 3.6dp 接近 visible 路径。
+    val style = MaterialTheme.typography.bodyMedium
+    val revealedColor = MaterialTheme.colorScheme.onSurface
 
-        words.forEachIndexed { index, word ->
-            val cleanWord = word.replace(Regex("[^\\w']"), "")
-            if (cleanWord.isNotEmpty()) {
-                if (currentLineCharCount + cleanWord.length > maxCharsPerLine && currentLine.isNotEmpty()) {
-                    result.add(currentLine.toList())
-                    currentLine = mutableListOf()
-                    currentLineCharCount = 0
-                }
-                currentLine.add(index to cleanWord)
-                currentLineCharCount += cleanWord.length + 1 // +1 for space
-            }
-        }
-        if (currentLine.isNotEmpty()) {
-            result.add(currentLine.toList())
-        }
-        result
-    }
-
-    Column(
+    FlowRow(
         modifier = modifier,
-        horizontalAlignment = Alignment.Start
+        horizontalArrangement = Arrangement.Start,
+        // (2026-07-18) §16.X fix2: 上下行恢复 4dp 间隙, 同 ListeningPage.
+        // 见该文件 ListeningHiddenWordsFlowRow 的 §16.X fix2 注释.
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        lines.forEach { lineWords ->
-            Row(
-                horizontalArrangement = Arrangement.Start,
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                lineWords.forEach { (index, cleanWord) ->
-                    val isRevealed = revealedWords.contains(index)
-
-                    if (isRevealed) {
-                        // Visible word — tap is a no-op, long-press opens
-                        // the translation dialog. Padded Box for a more
-                        // forgiving long-press hit target.
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .combinedClickable(
-                                    onClick = { },
-                                    onLongClick = { onWordLongClick(cleanWord) },
-                                )
-                                .padding(horizontal = 2.dp, vertical = 2.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = cleanWord,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
+        words.forEachIndexed { index, word ->
+            if (index > 0) {
+                Text(" ", style = style, color = revealedColor)
+            }
+            val isRevealed = revealedWords.contains(index)
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .then(
+                        if (isRevealed) {
+                            // revealed: combinedClickable, 长按翻译;
+                            // onClick 留空 (与旧版一致, 点击不做).
+                            Modifier.combinedClickable(
+                                onClick = { },
+                                onLongClick = { onWordLongClick(word) },
                             )
-                        }
-                    } else {
-                        // Hidden word block — invisible text determines natural size, avoiding descender clipping
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
+                        } else {
+                            // hidden: 浅灰底 + 点击触发 reveal.
+                            Modifier
                                 .background(Color(0xFFE0E0E0))
                                 .clickable { onWordClick(index) }
-                                .padding(horizontal = 6.dp, vertical = 2.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = cleanWord,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Color.Transparent
-                            )
                         }
-                    }
-                    Spacer(modifier = Modifier.width(4.dp))
-                }
+                    )
+                    .padding(horizontal = 2.dp, vertical = 2.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = word,
+                    style = style,
+                    color = if (isRevealed) revealedColor else Color.Transparent,
+                )
             }
-            Spacer(modifier = Modifier.height(4.dp))
         }
     }
 }
