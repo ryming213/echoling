@@ -7,7 +7,7 @@
 [![Kotlin](https://img.shields.io/badge/100%25-Kotlin-7F52FF)](#-技术栈)
 [![License](https://img.shields.io/badge/license-MIT-blue)](#-license)
 
-[📥 **下载 v1.1 APK (84.8 MB)**](https://github.com/ryming213/EchoLing/releases/download/v1.1/app-release.apk) · [🐛 反馈问题](https://github.com/ryming213/echoling/issues)
+> 下载与版本历史见右侧 **Releases** 区。
 
 ---
 
